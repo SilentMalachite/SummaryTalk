@@ -1,0 +1,94 @@
+# Xcode
+#
+# gitignore contributors: better projects by omitting unneeded files
+
+## Build results
+build/
+DerivedData/
+
+## GNU Objective-C visual interface
+*.nib
+*.jmap
+
+## Xcode project-specific
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+*.pbxuser
+xcuserdata/
+
+## XCode 4 workspaces
+*.xcworkspace
+!default.xcworkspace
+
+## XCode 4 personal settings
+xcuserdatad/
+
+## XCState
+*.xcuserstate
+
+## Service Management
+/ServiceManagement
+
+## Others
+*.lsany
+*.moved-aside
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+
+## CocoaPods
+#
+# It is a common debate whether or not to include the Pods directory.
+# For more info, see https://guides.cocoapods.org/using/using-cocoapods.html#should-i-check-the-pods-directory-into-source-control
+#
+# Pods/
+
+## Carthage
+#
+# It is a common debate whether or not to include the Carthage/Build directory.
+# For more info, see https://github.com/Carthage/Carthage/blob/master/Documentation/Artifacts.md#build-artifacts
+#
+# Carthage/Build
+
+## AccuRev
+.accurev/
+
+## Fastlane
+fastlane/report.xml
+fastlane/Preview.html
+fastlane/screenshots
+fastlane/test_output
+
+## Code Injection
+iOSInjectionProject/
+
+## macOS
+.DS_Store
+*.swp
+*~
+.apple_double
+.LSOverride
+
+# Icon must end with two \r
+Icon
+
+
+# Thumbnails
+._*
+
+# Files that might appear in the root of a volume
+.DocumentRevisions-V100
+.fseventsd
+.Spotlight-V100
+.TemporaryItems
+.Trashes
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# Directories potentially created on remote AFP share
+.AppleDB
+.AppleDesktop
+Network Trash Folder
+Temporary Items
+.apdisk
