@@ -1,6 +1,7 @@
 import Foundation
 import ScreenCaptureKit
 import AVFoundation
+import CoreGraphics
 
 @MainActor
 @Observable
@@ -17,6 +18,11 @@ final class SystemAudioManager: NSObject {
     
     override init() {
         super.init()
+    }
+
+    private func ensureScreenRecordingPermission() -> Bool {
+        if CGPreflightScreenCaptureAccess() { return true }
+        return CGRequestScreenCaptureAccess()
     }
     
     func refreshAvailableApps() async {
@@ -47,11 +53,21 @@ final class SystemAudioManager: NSObject {
         guard !isCapturing else { return }
         
         do {
+            guard ensureScreenRecordingPermission() else {
+                errorMessage = "画面収録の権限がありません。システム設定 > プライバシーとセキュリティ > 画面収録で許可してください。"
+                return
+            }
+            
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             
             let filter: SCContentFilter
             if let app = app ?? selectedApp {
-                filter = SCContentFilter(desktopIndependentWindow: content.windows.first { $0.owningApplication?.processID == app.processID } ?? content.windows.first!)
+                let windows = content.windows.filter { $0.owningApplication?.processID == app.processID }
+                guard let targetWindow = windows.first else {
+                    errorMessage = "選択したアプリにキャプチャ対象のウィンドウがありません"
+                    return
+                }
+                filter = SCContentFilter(desktopIndependentWindow: targetWindow)
             } else {
                 guard let display = content.displays.first else {
                     errorMessage = "ディスプレイが見つかりません"
@@ -135,25 +151,33 @@ final class AudioStreamOutput: NSObject, SCStreamOutput {
         
         guard let format = format else { return }
         
-        do {
-            let blockBuffer = try sampleBuffer.dataBuffer?.dataBytes()
-            guard let blockBuffer = blockBuffer else { return }
-            
-            let frameCount = AVAudioFrameCount(sampleBuffer.numSamples)
-            guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount) else { return }
-            pcmBuffer.frameLength = frameCount
-            
-            if let channelData = pcmBuffer.floatChannelData {
-                blockBuffer.withUnsafeBytes { ptr in
-                    if let baseAddress = ptr.baseAddress {
-                        memcpy(channelData[0], baseAddress, Int(frameCount) * MemoryLayout<Float>.size)
-                    }
+        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
+        let totalLength = CMBlockBufferGetDataLength(blockBuffer)
+        guard totalLength > 0 else { return }
+        
+        let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
+        let frameCapacity = AVAudioFrameCount(totalLength / bytesPerFrame)
+        guard frameCapacity > 0 else { return }
+        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity) else { return }
+        
+        var data = Data(count: totalLength)
+        let copyResult = data.withUnsafeMutableBytes { ptr -> OSStatus in
+            guard let dest = ptr.baseAddress else { return -1 }
+            return CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: totalLength, destination: dest)
+        }
+        guard copyResult == kCMBlockBufferNoErr else { return }
+        
+        let copyBytes = min(totalLength, Int(frameCapacity) * bytesPerFrame)
+        if let channelData = pcmBuffer.floatChannelData {
+            data.withUnsafeBytes { ptr in
+                if let base = ptr.baseAddress {
+                    memcpy(channelData[0], base, copyBytes)
                 }
             }
-            
-            handler(pcmBuffer)
-        } catch {
-            // Ignore conversion errors
+            let framesCopied = copyBytes / bytesPerFrame
+            pcmBuffer.frameLength = AVAudioFrameCount(framesCopied)
         }
+        
+        handler(pcmBuffer)
     }
 }

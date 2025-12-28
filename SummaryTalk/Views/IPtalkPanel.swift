@@ -39,6 +39,11 @@ struct IPtalkPanel: View {
                         if iptalkManager.isConnected {
                             iptalkManager.stopListening()
                         } else {
+                            guard let portValue = UInt16(portText), portValue > 0 else {
+                                iptalkManager.errorMessage = "1〜65535のポート番号を入力してください"
+                                return
+                            }
+                            iptalkManager.updatePort(portValue)
                             await iptalkManager.startListening()
                         }
                     }
@@ -116,6 +121,9 @@ struct IPtalkPanel: View {
         .padding()
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
+        .onAppear {
+            portText = String(iptalkManager.port)
+        }
     }
 }
 

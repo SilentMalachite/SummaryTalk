@@ -13,10 +13,14 @@ final class IPtalkManager {
     private var listener: NWListener?
     private var broadcastConnection: NWConnection?
     
-    private let port: UInt16
+    private(set) var port: UInt16
     private let encoding: String.Encoding = .shiftJIS
     
     init(port: UInt16 = 15000) {
+        self.port = port
+    }
+    
+    func updatePort(_ port: UInt16) {
         self.port = port
     }
     
@@ -25,7 +29,12 @@ final class IPtalkManager {
             let parameters = NWParameters.udp
             parameters.allowLocalEndpointReuse = true
             
-            listener = try NWListener(using: parameters, on: NWEndpoint.Port(rawValue: port)!)
+            guard let nwPort = NWEndpoint.Port(rawValue: port) else {
+                errorMessage = "ポート番号が不正です"
+                return
+            }
+            
+            listener = try NWListener(using: parameters, on: nwPort)
             
             listener?.stateUpdateHandler = { [weak self] state in
                 Task { @MainActor in
@@ -126,7 +135,10 @@ final class IPtalkManager {
     
     private func sendBroadcast(data: Data) {
         let broadcastHost = NWEndpoint.Host("255.255.255.255")
-        let broadcastPort = NWEndpoint.Port(rawValue: port)!
+        guard let broadcastPort = NWEndpoint.Port(rawValue: port) else {
+            errorMessage = "ポート番号が不正です"
+            return
+        }
         
         let parameters = NWParameters.udp
         parameters.allowLocalEndpointReuse = true
@@ -148,7 +160,7 @@ final class IPtalkManager {
     // Header: 4 bytes command + 4 bytes length
     // Body: Shift-JIS encoded text
     
-    private func createIPtalkPacket(text: String) -> Data {
+    func createIPtalkPacket(text: String) -> Data {
         var packet = Data()
         
         // Command: "TEXT" (simplified)
@@ -172,7 +184,7 @@ final class IPtalkManager {
         return packet
     }
     
-    private func parseIPtalkPacket(data: Data) -> IPtalkPacket? {
+    func parseIPtalkPacket(data: Data) -> IPtalkPacket? {
         guard data.count >= 8 else { return nil }
         
         // Read command (first 4 bytes)
