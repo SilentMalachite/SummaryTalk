@@ -101,22 +101,20 @@ final class TranscriptionManager {
         
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         
-        guard let recognitionRequest else {
+        guard let activeRequest = recognitionRequest else {
             throw NSError(domain: "TranscriptionManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "認識リクエストを作成できません"])
         }
         
-        recognitionRequest.shouldReportPartialResults = true
-        recognitionRequest.addsPunctuation = true
+        activeRequest.shouldReportPartialResults = true
+        activeRequest.addsPunctuation = true
         
         if systemAudioManager == nil {
             systemAudioManager = SystemAudioManager()
         }
         
-        systemAudioManager?.audioBufferHandler = { [weak self] buffer in
-            self?.recognitionRequest?.append(buffer)
+        await systemAudioManager?.startCapturing { buffer in
+            activeRequest.appendAudioSampleBuffer(buffer)
         }
-        
-        await systemAudioManager?.startCapturing()
         
         if let error = systemAudioManager?.errorMessage {
             throw NSError(domain: "TranscriptionManager", code: 2, userInfo: [NSLocalizedDescriptionKey: error])
@@ -144,6 +142,7 @@ final class TranscriptionManager {
                     // Ignore "No speech detected" errors (code 1110)
                     if nsError.domain != "kAFAssistantErrorDomain" || nsError.code != 1110 {
                         self.errorMessage = error.localizedDescription
+                        self.stopRecording()
                     }
                 }
             }
@@ -153,8 +152,10 @@ final class TranscriptionManager {
     func stopRecording() {
         switch audioSource {
         case .microphone:
-            audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
+            if audioEngine.isRunning {
+                audioEngine.stop()
+                audioEngine.inputNode.removeTap(onBus: 0)
+            }
         case .systemAudio:
             Task {
                 await systemAudioManager?.stopCapturing()
