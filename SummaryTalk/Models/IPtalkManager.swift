@@ -15,6 +15,7 @@ final class IPtalkManager {
     
     private(set) var port: UInt16
     private let encoding: String.Encoding = .shiftJIS
+    private let queue = DispatchQueue(label: "com.summarytalk.iptalk")
     
     init(port: UInt16 = 15000) {
         self.port = port
@@ -59,7 +60,7 @@ final class IPtalkManager {
                 }
             }
             
-            listener?.start(queue: .main)
+            listener?.start(queue: queue)
             
         } catch {
             errorMessage = "リスナー開始エラー: \(error.localizedDescription)"
@@ -105,7 +106,7 @@ final class IPtalkManager {
         }
         
         receiveData(from: newConnection)
-        newConnection.start(queue: .main)
+        newConnection.start(queue: queue)
     }
     
     private func receiveData(from connection: NWConnection) {
@@ -153,7 +154,7 @@ final class IPtalkManager {
             }
         }
         
-        connection.start(queue: .main)
+        connection.start(queue: queue)
     }
     
     // IPtalk packet format (simplified)

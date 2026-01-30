@@ -2,6 +2,7 @@ import Foundation
 import ScreenCaptureKit
 import AVFoundation
 import CoreGraphics
+import CoreMedia
 
 @MainActor
 @Observable
@@ -13,8 +14,7 @@ final class SystemAudioManager: NSObject {
     
     private var stream: SCStream?
     private var streamOutput: AudioStreamOutput?
-    
-    var audioBufferHandler: ((AVAudioPCMBuffer) -> Void)?
+    private let audioQueue = DispatchQueue(label: "com.summarytalk.audio")
     
     override init() {
         super.init()
@@ -49,7 +49,7 @@ final class SystemAudioManager: NSObject {
         }
     }
     
-    func startCapturing(app: SCRunningApplication? = nil) async {
+    func startCapturing(app: SCRunningApplication? = nil, handler: @escaping (CMSampleBuffer) -> Void) async {
         guard !isCapturing else { return }
         
         do {
@@ -89,11 +89,9 @@ final class SystemAudioManager: NSObject {
             
             stream = SCStream(filter: filter, configuration: config, delegate: self)
             
-            streamOutput = AudioStreamOutput { [weak self] buffer in
-                self?.audioBufferHandler?(buffer)
-            }
+            streamOutput = AudioStreamOutput(handler: handler)
             
-            try stream?.addStreamOutput(streamOutput!, type: .audio, sampleHandlerQueue: .main)
+            try stream?.addStreamOutput(streamOutput!, type: .audio, sampleHandlerQueue: audioQueue)
             try await stream?.startCapture()
             
             isCapturing = true
@@ -130,54 +128,15 @@ extension SystemAudioManager: SCStreamDelegate {
 }
 
 final class AudioStreamOutput: NSObject, SCStreamOutput {
-    private let handler: (AVAudioPCMBuffer) -> Void
+    private let handler: (CMSampleBuffer) -> Void
     
-    init(handler: @escaping (AVAudioPCMBuffer) -> Void) {
+    init(handler: @escaping (CMSampleBuffer) -> Void) {
         self.handler = handler
         super.init()
     }
     
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio else { return }
-        guard let formatDesc = sampleBuffer.formatDescription,
-              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else { return }
-        
-        let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: asbd.pointee.mSampleRate,
-            channels: AVAudioChannelCount(asbd.pointee.mChannelsPerFrame),
-            interleaved: false
-        )
-        
-        guard let format = format else { return }
-        
-        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
-        let totalLength = CMBlockBufferGetDataLength(blockBuffer)
-        guard totalLength > 0 else { return }
-        
-        let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
-        let frameCapacity = AVAudioFrameCount(totalLength / bytesPerFrame)
-        guard frameCapacity > 0 else { return }
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity) else { return }
-        
-        var data = Data(count: totalLength)
-        let copyResult = data.withUnsafeMutableBytes { ptr -> OSStatus in
-            guard let dest = ptr.baseAddress else { return -1 }
-            return CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: totalLength, destination: dest)
-        }
-        guard copyResult == kCMBlockBufferNoErr else { return }
-        
-        let copyBytes = min(totalLength, Int(frameCapacity) * bytesPerFrame)
-        if let channelData = pcmBuffer.floatChannelData {
-            data.withUnsafeBytes { ptr in
-                if let base = ptr.baseAddress {
-                    memcpy(channelData[0], base, copyBytes)
-                }
-            }
-            let framesCopied = copyBytes / bytesPerFrame
-            pcmBuffer.frameLength = AVAudioFrameCount(framesCopied)
-        }
-        
-        handler(pcmBuffer)
+        handler(sampleBuffer)
     }
 }
