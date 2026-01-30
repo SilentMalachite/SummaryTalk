@@ -9,9 +9,8 @@ final class IPtalkManager {
     var errorMessage: String?
     var connectedPartners: [String] = []
     
-    private var connection: NWConnection?
     private var listener: NWListener?
-    private var broadcastConnection: NWConnection?
+    private var activeConnections: [NWConnection] = []
     
     private(set) var port: UInt16
     private let encoding: String.Encoding = .shiftJIS
@@ -69,10 +68,8 @@ final class IPtalkManager {
     func stopListening() {
         listener?.cancel()
         listener = nil
-        connection?.cancel()
-        connection = nil
-        broadcastConnection?.cancel()
-        broadcastConnection = nil
+        activeConnections.forEach { $0.cancel() }
+        activeConnections.removeAll()
         isConnected = false
         connectedPartners.removeAll()
     }
@@ -85,6 +82,8 @@ final class IPtalkManager {
     }
     
     private func handleNewConnection(_ newConnection: NWConnection) {
+        activeConnections.append(newConnection)
+        
         newConnection.stateUpdateHandler = { [weak self] state in
             Task { @MainActor in
                 switch state {
@@ -97,7 +96,14 @@ final class IPtalkManager {
                         }
                     }
                 case .failed, .cancelled:
-                    break
+                    if let endpoint = newConnection.currentPath?.remoteEndpoint,
+                       case .hostPort(let host, _) = endpoint {
+                        self?.connectedPartners.removeAll { $0 == "\(host)" }
+                    }
+                    self?.activeConnections.removeAll { $0 === newConnection }
+                    if case .failed(let error) = state {
+                        self?.errorMessage = "接続エラー: \(error.localizedDescription)"
+                    }
                 default:
                     break
                 }
@@ -109,15 +115,22 @@ final class IPtalkManager {
     }
     
     private func receiveData(from connection: NWConnection) {
-        connection.receiveMessage { [weak self] content, _, isComplete, error in
+        connection.receiveMessage { [weak self] content, _, _, error in
             Task { @MainActor in
                 if let data = content {
                     self?.processReceivedData(data)
                 }
                 
-                if error == nil && !isComplete {
-                    self?.receiveData(from: connection)
+                if let error {
+                    if case .posix(let code) = error, code == .ECANCELED {
+                        self?.activeConnections.removeAll { $0 === connection }
+                        return
+                    }
+                    self?.errorMessage = "受信エラー: \(error.localizedDescription)"
+                    return
                 }
+                
+                self?.receiveData(from: connection)
             }
         }
     }
