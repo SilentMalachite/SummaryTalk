@@ -15,6 +15,7 @@ final class SystemAudioManager: NSObject {
     private var streamOutput: AudioStreamOutput?
     private var audioConverter: AVAudioConverter?
     private let targetFormat: AVAudioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+    private let audioProcessingQueue = DispatchQueue(label: "com.summarytalk.audio", qos: .userInitiated)
     
     var audioBufferHandler: ((AVAudioPCMBuffer) -> Void)?
     
@@ -30,15 +31,11 @@ final class SystemAudioManager: NSObject {
     func refreshAvailableApps() async {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let targetApps = ["zoom", "teams", "meet", "webex", "slack", "discord", "facetime"]
             availableApps = content.applications.filter { app in
-                let name = app.applicationName.lowercased()
-                return name.contains("zoom") || 
-                       name.contains("teams") || 
-                       name.contains("meet") ||
-                       name.contains("webex") ||
-                       name.contains("slack") ||
-                       name.contains("discord") ||
-                       name.contains("facetime")
+                targetApps.contains { target in
+                    app.applicationName.localizedCaseInsensitiveContains(target)
+                }
             }
             
             if availableApps.isEmpty {
@@ -98,7 +95,7 @@ final class SystemAudioManager: NSObject {
                 }
             }
             
-            try stream?.addStreamOutput(streamOutput!, type: .audio, sampleHandlerQueue: .main)
+            try stream?.addStreamOutput(streamOutput!, type: .audio, sampleHandlerQueue: audioProcessingQueue)
             try await stream?.startCapture()
             
             isCapturing = true
@@ -127,6 +124,11 @@ final class SystemAudioManager: NSObject {
     }
 
     private func convertBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        if buffer.format.sampleRate == targetFormat.sampleRate,
+           buffer.format.channelCount == targetFormat.channelCount,
+           buffer.format.commonFormat == targetFormat.commonFormat {
+            return buffer
+        }
         if audioConverter == nil {
             audioConverter = AVAudioConverter(from: buffer.format, to: targetFormat)
         }
@@ -134,14 +136,18 @@ final class SystemAudioManager: NSObject {
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate
         let convertedCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1
         guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: convertedCapacity) else {
-            errorMessage = "オーディオバッファ変換に失敗しました"
+            Task { @MainActor in
+                errorMessage = "オーディオバッファ変換に失敗しました"
+            }
             return nil
         }
         do {
             try audioConverter.convert(to: outputBuffer, from: buffer)
             return outputBuffer
         } catch {
-            errorMessage = "オーディオ変換エラー: \(error.localizedDescription)"
+            Task { @MainActor in
+                errorMessage = "オーディオ変換エラー: \(error.localizedDescription)"
+            }
             return nil
         }
     }
@@ -187,23 +193,12 @@ final class AudioStreamOutput: NSObject, SCStreamOutput {
         guard frameCapacity > 0 else { return }
         guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity) else { return }
         
-        var data = Data(count: totalLength)
-        let copyResult = data.withUnsafeMutableBytes { ptr -> OSStatus in
-            guard let dest = ptr.baseAddress else { return -1 }
-            return CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: totalLength, destination: dest)
-        }
+        guard let channelData = pcmBuffer.floatChannelData else { return }
+        
+        let copyResult = CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: totalLength, destination: channelData[0])
         guard copyResult == kCMBlockBufferNoErr else { return }
         
-        let copyBytes = min(totalLength, Int(frameCapacity) * bytesPerFrame)
-        if let channelData = pcmBuffer.floatChannelData {
-            data.withUnsafeBytes { ptr in
-                if let base = ptr.baseAddress {
-                    memcpy(channelData[0], base, copyBytes)
-                }
-            }
-            let framesCopied = copyBytes / bytesPerFrame
-            pcmBuffer.frameLength = AVAudioFrameCount(framesCopied)
-        }
+        pcmBuffer.frameLength = frameCapacity
         
         handler(pcmBuffer)
     }

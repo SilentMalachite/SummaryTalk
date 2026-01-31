@@ -5,12 +5,14 @@ import Network
 @Observable
 final class IPtalkManager {
     var isConnected: Bool = false
-    var receivedText: String = ""
+    var receivedText: String { receivedTextSegments.joined() }
     var errorMessage: String?
     var connectedPartners: [String] = []
     
     private var listener: NWListener?
     private var activeConnections: [NWConnection] = []
+    private var receivedTextSegments: [String] = []
+    private let networkQueue = DispatchQueue(label: "com.summarytalk.network", qos: .userInitiated)
     
     private(set) var port: UInt16
     private let encoding: String.Encoding = .shiftJIS
@@ -58,7 +60,7 @@ final class IPtalkManager {
                 }
             }
             
-            listener?.start(queue: .main)
+            listener?.start(queue: networkQueue)
             
         } catch {
             errorMessage = "リスナー開始エラー: \(error.localizedDescription)"
@@ -111,7 +113,7 @@ final class IPtalkManager {
         }
         
         receiveData(from: newConnection)
-        newConnection.start(queue: .main)
+        newConnection.start(queue: networkQueue)
     }
     
     private func receiveData(from connection: NWConnection) {
@@ -139,10 +141,11 @@ final class IPtalkManager {
         guard let packet = parseIPtalkPacket(data: data) else { return }
         
         if !packet.text.isEmpty {
-            receivedText += packet.text
-            if !packet.text.hasSuffix("\n") {
-                receivedText += "\n"
+            var textToAdd = packet.text
+            if !textToAdd.hasSuffix("\n") {
+                textToAdd += "\n"
             }
+            receivedTextSegments.append(textToAdd)
         }
     }
     
@@ -166,7 +169,7 @@ final class IPtalkManager {
             }
         }
         
-        connection.start(queue: .main)
+        connection.start(queue: networkQueue)
     }
     
     // IPtalk packet format (simplified)
@@ -218,7 +221,7 @@ final class IPtalkManager {
     }
     
     func clearReceivedText() {
-        receivedText = ""
+        receivedTextSegments.removeAll()
     }
 }
 

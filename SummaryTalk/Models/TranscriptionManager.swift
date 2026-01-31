@@ -22,6 +22,11 @@ final class TranscriptionManager {
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
     private let speechRecognizer: SFSpeechRecognizer?
     private let audioEngine = AVAudioEngine()
+    private var pendingTranscription: String = ""
+    private var lastTranscriptionUpdate: Date = .distantPast
+    private var partialUpdateTask: Task<Void, Never>?
+    private let partialUpdateInterval: TimeInterval = 0.25
+    private let audioBufferSize: AVAudioFrameCount = 2048
     
     var systemAudioManager: SystemAudioManager?
     
@@ -69,6 +74,8 @@ final class TranscriptionManager {
     private func startMicrophoneRecording() throws {
         recognitionTask?.cancel()
         recognitionTask = nil
+        partialUpdateTask?.cancel()
+        pendingTranscription = ""
         
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         
@@ -78,11 +85,15 @@ final class TranscriptionManager {
         
         recognitionRequest.shouldReportPartialResults = true
         recognitionRequest.addsPunctuation = true
+        recognitionRequest.taskHint = .dictation
+        if speechRecognizer?.supportsOnDeviceRecognition == true {
+            recognitionRequest.requiresOnDeviceRecognition = true
+        }
         
         let inputNode = audioEngine.inputNode
         let recordingFormat = inputNode.outputFormat(forBus: 0)
         
-        inputNode.installTap(onBus: 0, bufferSize: 1024, format: recordingFormat) { [weak self] buffer, _ in
+        inputNode.installTap(onBus: 0, bufferSize: audioBufferSize, format: recordingFormat) { [weak self] buffer, _ in
             self?.recognitionRequest?.append(buffer)
         }
         
@@ -98,6 +109,8 @@ final class TranscriptionManager {
     private func startSystemAudioRecording() async throws {
         recognitionTask?.cancel()
         recognitionTask = nil
+        partialUpdateTask?.cancel()
+        pendingTranscription = ""
         
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
         
@@ -107,6 +120,10 @@ final class TranscriptionManager {
         
         recognitionRequest.shouldReportPartialResults = true
         recognitionRequest.addsPunctuation = true
+        recognitionRequest.taskHint = .dictation
+        if speechRecognizer?.supportsOnDeviceRecognition == true {
+            recognitionRequest.requiresOnDeviceRecognition = true
+        }
         
         if systemAudioManager == nil {
             systemAudioManager = SystemAudioManager()
@@ -136,7 +153,7 @@ final class TranscriptionManager {
                 guard let self else { return }
                 
                 if let result {
-                    self.transcribedText = result.bestTranscription.formattedString
+                    self.handleRecognitionUpdate(text: result.bestTranscription.formattedString, isFinal: result.isFinal)
                 }
                 
                 if let error {
@@ -146,6 +163,35 @@ final class TranscriptionManager {
                         self.errorMessage = error.localizedDescription
                     }
                 }
+            }
+        }
+    }
+
+    private func handleRecognitionUpdate(text: String, isFinal: Bool) {
+        guard text != transcribedText else { return }
+        if isFinal {
+            partialUpdateTask?.cancel()
+            transcribedText = text
+            lastTranscriptionUpdate = Date()
+            return
+        }
+
+        pendingTranscription = text
+        let now = Date()
+        if now.timeIntervalSince(lastTranscriptionUpdate) >= partialUpdateInterval {
+            transcribedText = pendingTranscription
+            lastTranscriptionUpdate = now
+            return
+        }
+
+        partialUpdateTask?.cancel()
+        partialUpdateTask = Task { @MainActor in
+            let delay = UInt64(partialUpdateInterval * 1_000_000_000)
+            try? await Task.sleep(nanoseconds: delay)
+            guard !Task.isCancelled else { return }
+            if self.transcribedText != self.pendingTranscription {
+                self.transcribedText = self.pendingTranscription
+                self.lastTranscriptionUpdate = Date()
             }
         }
     }
@@ -160,6 +206,9 @@ final class TranscriptionManager {
                 await systemAudioManager?.stopCapturing()
             }
         }
+
+        partialUpdateTask?.cancel()
+        pendingTranscription = ""
         
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
@@ -170,6 +219,8 @@ final class TranscriptionManager {
     }
     
     func clearText() {
+        partialUpdateTask?.cancel()
+        pendingTranscription = ""
         transcribedText = ""
     }
     
