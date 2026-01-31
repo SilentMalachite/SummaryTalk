@@ -31,14 +31,14 @@ final class SystemAudioManager: NSObject {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             availableApps = content.applications.filter { app in
-                let name = app.applicationName.lowercased()
-                return name.contains("zoom") || 
-                       name.contains("teams") || 
-                       name.contains("meet") ||
-                       name.contains("webex") ||
-                       name.contains("slack") ||
-                       name.contains("discord") ||
-                       name.contains("facetime")
+                let name = app.applicationName
+                return name.localizedCaseInsensitiveContains("zoom") ||
+                       name.localizedCaseInsensitiveContains("teams") ||
+                       name.localizedCaseInsensitiveContains("meet") ||
+                       name.localizedCaseInsensitiveContains("webex") ||
+                       name.localizedCaseInsensitiveContains("slack") ||
+                       name.localizedCaseInsensitiveContains("discord") ||
+                       name.localizedCaseInsensitiveContains("facetime")
             }
             
             if availableApps.isEmpty {
