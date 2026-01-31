@@ -166,6 +166,10 @@ final class AudioStreamOutput: NSObject, SCStreamOutput {
     
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio else { return }
+        processAudioSampleBuffer(sampleBuffer)
+    }
+
+    func processAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer) {
         guard let formatDesc = sampleBuffer.formatDescription,
               let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else { return }
         
@@ -187,23 +191,14 @@ final class AudioStreamOutput: NSObject, SCStreamOutput {
         guard frameCapacity > 0 else { return }
         guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity) else { return }
         
-        var data = Data(count: totalLength)
-        let copyResult = data.withUnsafeMutableBytes { ptr -> OSStatus in
-            guard let dest = ptr.baseAddress else { return -1 }
-            return CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: totalLength, destination: dest)
-        }
-        guard copyResult == kCMBlockBufferNoErr else { return }
+        guard let channelData = pcmBuffer.floatChannelData else { return }
         
         let copyBytes = min(totalLength, Int(frameCapacity) * bytesPerFrame)
-        if let channelData = pcmBuffer.floatChannelData {
-            data.withUnsafeBytes { ptr in
-                if let base = ptr.baseAddress {
-                    memcpy(channelData[0], base, copyBytes)
-                }
-            }
-            let framesCopied = copyBytes / bytesPerFrame
-            pcmBuffer.frameLength = AVAudioFrameCount(framesCopied)
-        }
+        let copyResult = CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: copyBytes, destination: channelData[0])
+        guard copyResult == kCMBlockBufferNoErr else { return }
+
+        let framesCopied = copyBytes / bytesPerFrame
+        pcmBuffer.frameLength = AVAudioFrameCount(framesCopied)
         
         handler(pcmBuffer)
     }
