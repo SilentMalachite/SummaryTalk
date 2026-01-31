@@ -13,8 +13,8 @@ final class SystemAudioManager: NSObject {
     
     private var stream: SCStream?
     private var streamOutput: AudioStreamOutput?
-    private var audioConverter: AVAudioConverter?
     private let targetFormat: AVAudioFormat = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false)!
+    private let audioQueue = DispatchQueue(label: "com.summarytalk.audio", qos: .userInteractive)
     
     var audioBufferHandler: ((AVAudioPCMBuffer) -> Void)?
     
@@ -91,19 +91,17 @@ final class SystemAudioManager: NSObject {
             
             stream = SCStream(filter: filter, configuration: config, delegate: self)
             
-            streamOutput = AudioStreamOutput { [weak self] buffer in
-                guard let self else { return }
-                if let converted = self.convertBuffer(buffer) {
-                    self.audioBufferHandler?(converted)
+            streamOutput = AudioStreamOutput(targetFormat: targetFormat) { [weak self] buffer in
+                Task { @MainActor in
+                    self?.audioBufferHandler?(buffer)
                 }
             }
             
-            try stream?.addStreamOutput(streamOutput!, type: .audio, sampleHandlerQueue: .main)
+            try stream?.addStreamOutput(streamOutput!, type: .audio, sampleHandlerQueue: audioQueue)
             try await stream?.startCapture()
             
             isCapturing = true
             errorMessage = nil
-            audioConverter = nil
             
         } catch {
             errorMessage = "キャプチャ開始エラー: \(error.localizedDescription)"
@@ -122,28 +120,7 @@ final class SystemAudioManager: NSObject {
         
         stream = nil
         streamOutput = nil
-        audioConverter = nil
         isCapturing = false
-    }
-
-    private func convertBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
-        if audioConverter == nil {
-            audioConverter = AVAudioConverter(from: buffer.format, to: targetFormat)
-        }
-        guard let audioConverter else { return nil }
-        let ratio = targetFormat.sampleRate / buffer.format.sampleRate
-        let convertedCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1
-        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: convertedCapacity) else {
-            errorMessage = "オーディオバッファ変換に失敗しました"
-            return nil
-        }
-        do {
-            try audioConverter.convert(to: outputBuffer, from: buffer)
-            return outputBuffer
-        } catch {
-            errorMessage = "オーディオ変換エラー: \(error.localizedDescription)"
-            return nil
-        }
     }
 }
 
@@ -158,8 +135,11 @@ extension SystemAudioManager: SCStreamDelegate {
 
 final class AudioStreamOutput: NSObject, SCStreamOutput {
     private let handler: (AVAudioPCMBuffer) -> Void
+    private let targetFormat: AVAudioFormat
+    private var audioConverter: AVAudioConverter?
     
-    init(handler: @escaping (AVAudioPCMBuffer) -> Void) {
+    init(targetFormat: AVAudioFormat, handler: @escaping (AVAudioPCMBuffer) -> Void) {
+        self.targetFormat = targetFormat
         self.handler = handler
         super.init()
     }
@@ -205,6 +185,31 @@ final class AudioStreamOutput: NSObject, SCStreamOutput {
             pcmBuffer.frameLength = AVAudioFrameCount(framesCopied)
         }
         
-        handler(pcmBuffer)
+        if let converted = convertBuffer(pcmBuffer) {
+            handler(converted)
+        }
+    }
+
+    private func convertBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        // Recreate converter if it doesn't exist or if input format changed
+        if audioConverter == nil || audioConverter?.inputFormat != buffer.format {
+            audioConverter = AVAudioConverter(from: buffer.format, to: targetFormat)
+        }
+
+        guard let audioConverter else { return nil }
+
+        let ratio = targetFormat.sampleRate / buffer.format.sampleRate
+        let convertedCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1
+        guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: convertedCapacity) else {
+            return nil
+        }
+
+        do {
+            try audioConverter.convert(to: outputBuffer, from: buffer)
+            return outputBuffer
+        } catch {
+            print("Audio conversion error: \(error.localizedDescription)")
+            return nil
+        }
     }
 }
