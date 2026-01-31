@@ -5,7 +5,10 @@ import Network
 @Observable
 final class IPtalkManager {
     var isConnected: Bool = false
-    var receivedText: String = ""
+    private var receivedTextSegments: [String] = []
+    var receivedText: String {
+        receivedTextSegments.joined()
+    }
     var errorMessage: String?
     var connectedPartners: [String] = []
     
@@ -139,9 +142,9 @@ final class IPtalkManager {
         guard let packet = parseIPtalkPacket(data: data) else { return }
         
         if !packet.text.isEmpty {
-            receivedText += packet.text
+            receivedTextSegments.append(packet.text)
             if !packet.text.hasSuffix("\n") {
-                receivedText += "\n"
+                receivedTextSegments.append("\n")
             }
         }
     }
@@ -218,7 +221,7 @@ final class IPtalkManager {
     }
     
     func clearReceivedText() {
-        receivedText = ""
+        receivedTextSegments.removeAll()
     }
 }
 
