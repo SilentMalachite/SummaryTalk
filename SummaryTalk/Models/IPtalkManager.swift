@@ -15,7 +15,10 @@ final class IPtalkManager {
     private let networkQueue = DispatchQueue(label: "com.summarytalk.network", qos: .userInitiated)
     
     private(set) var port: UInt16
-    private let encoding: String.Encoding = .shiftJIS
+    private static let encoding: String.Encoding = .shiftJIS
+
+    // Dedicated queue for network operations to offload from Main Thread
+    private let networkQueue = DispatchQueue(label: "com.summarytalk.iptalk.network", qos: .userInitiated)
     
     init(port: UInt16 = 15000) {
         self.port = port
@@ -116,30 +119,35 @@ final class IPtalkManager {
         newConnection.start(queue: networkQueue)
     }
     
-    private func receiveData(from connection: NWConnection) {
+    nonisolated private func receiveData(from connection: NWConnection) {
         connection.receiveMessage { [weak self] content, _, _, error in
-            Task { @MainActor in
-                if let data = content {
-                    self?.processReceivedData(data)
+            // Runs on networkQueue
+
+            if let data = content, let self = self {
+                // Parse off the main thread
+                if let packet = self.parseIPtalkPacket(data: data) {
+                    Task { @MainActor in
+                        self.processReceivedPacket(packet)
+                    }
                 }
-                
-                if let error {
+            }
+
+            if let error {
+                Task { @MainActor in
                     if case .posix(let code) = error, code == .ECANCELED {
                         self?.activeConnections.removeAll { $0 === connection }
                         return
                     }
                     self?.errorMessage = "受信エラー: \(error.localizedDescription)"
-                    return
                 }
-                
-                self?.receiveData(from: connection)
+                return
             }
+
+            self?.receiveData(from: connection)
         }
     }
     
-    private func processReceivedData(_ data: Data) {
-        guard let packet = parseIPtalkPacket(data: data) else { return }
-        
+    private func processReceivedPacket(_ packet: IPtalkPacket) {
         if !packet.text.isEmpty {
             var textToAdd = packet.text
             if !textToAdd.hasSuffix("\n") {
@@ -176,7 +184,7 @@ final class IPtalkManager {
     // Header: 4 bytes command + 4 bytes length
     // Body: Shift-JIS encoded text
     
-    func createIPtalkPacket(text: String) -> Data {
+    nonisolated func createIPtalkPacket(text: String) -> Data {
         var packet = Data()
         
         // Command: "TEXT" (simplified)
@@ -184,7 +192,7 @@ final class IPtalkManager {
         packet.append(contentsOf: command)
         
         // Text data in Shift-JIS
-        if let textData = text.data(using: encoding) {
+        if let textData = text.data(using: Self.encoding) {
             // Length (4 bytes, little-endian)
             var length = UInt32(textData.count).littleEndian
             packet.append(Data(bytes: &length, count: 4))
@@ -200,7 +208,7 @@ final class IPtalkManager {
         return packet
     }
     
-    func parseIPtalkPacket(data: Data) -> IPtalkPacket? {
+    nonisolated func parseIPtalkPacket(data: Data) -> IPtalkPacket? {
         guard data.count >= 8 else { return nil }
         
         // Read command (first 4 bytes)
@@ -215,7 +223,7 @@ final class IPtalkManager {
         
         // Read text
         let textData = data.subdata(in: 8..<(8 + Int(length)))
-        let text = String(data: textData, encoding: encoding) ?? ""
+        let text = String(data: textData, encoding: Self.encoding) ?? ""
         
         return IPtalkPacket(command: command, text: text)
     }
