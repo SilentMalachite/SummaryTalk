@@ -133,17 +133,24 @@ final class SystemAudioManager: NSObject {
     func stopCapturing() async {
         guard isCapturing else { return }
 
+        var stopSucceeded = true
         do {
             try await stream?.stopCapture()
         } catch {
             lastErrorKind = .captureFailed
             errorMessage = "キャプチャ停止エラー: \(error.localizedDescription)"
+            stopSucceeded = false
         }
 
         stream = nil
         streamOutput = nil
         audioConverter = nil
         isCapturing = false
+
+        if stopSucceeded {
+            errorMessage = nil
+            lastErrorKind = nil
+        }
     }
 
     private func convertBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {

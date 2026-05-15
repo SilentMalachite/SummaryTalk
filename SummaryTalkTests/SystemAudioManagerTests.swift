@@ -65,4 +65,19 @@ final class SystemAudioManagerTests: XCTestCase {
         XCTAssertTrue(requestCalled, "preflight 失敗時は requestPermission が呼ばれる")
         XCTAssertTrue(manager.availableApps.isEmpty)
     }
+
+    func testStartCapturingSetsPermissionDeniedAndDoesNotPrompt() async {
+        var requestCalled = false
+        let manager = SystemAudioManager(
+            permissionCheck: { false },
+            requestPermission: { requestCalled = true }
+        )
+
+        await manager.startCapturing()
+
+        XCTAssertEqual(manager.lastErrorKind, .permissionDenied)
+        XCTAssertNotNil(manager.errorMessage)
+        XCTAssertFalse(manager.isCapturing)
+        XCTAssertFalse(requestCalled, "startCapturing は preflight のみで requestPermission を呼ばない")
+    }
 }
