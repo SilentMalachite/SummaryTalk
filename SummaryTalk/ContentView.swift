@@ -2,9 +2,10 @@ import SwiftUI
 
 struct ContentView: View {
     @State private var transcriptionManager = TranscriptionManager()
+    @State private var systemAudioManager = SystemAudioManager()
     @State private var iptalkManager = IPtalkManager()
     @State private var showIPtalkPanel = false
-    
+
     var body: some View {
         HStack(spacing: 0) {
             VStack(spacing: 0) {
@@ -12,10 +13,11 @@ struct ContentView: View {
                 Divider()
                 ControlPanel(
                     transcriptionManager: transcriptionManager,
+                    systemAudioManager: systemAudioManager,
                     showIPtalkPanel: $showIPtalkPanel
                 )
             }
-            
+
             if showIPtalkPanel {
                 Divider()
                 IPtalkPanel(
@@ -26,11 +28,6 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 600, minHeight: 400)
-        .onChange(of: transcriptionManager.transcribedText) { _, newValue in
-            if iptalkManager.isConnected && !newValue.isEmpty {
-                // Auto-send to IPtalk when text changes (optional)
-            }
-        }
     }
 }
 

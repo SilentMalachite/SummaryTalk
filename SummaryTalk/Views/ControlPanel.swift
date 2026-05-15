@@ -2,8 +2,9 @@ import SwiftUI
 
 struct ControlPanel: View {
     @Bindable var transcriptionManager: TranscriptionManager
+    @Bindable var systemAudioManager: SystemAudioManager
     @Binding var showIPtalkPanel: Bool
-    
+
     var body: some View {
         HStack(spacing: 16) {
             Picker("音声ソース", selection: $transcriptionManager.audioSource) {
@@ -14,13 +15,20 @@ struct ControlPanel: View {
             .pickerStyle(.menu)
             .frame(width: 180)
             .disabled(transcriptionManager.isRecording)
-            
+
+            if transcriptionManager.audioSource == .systemAudio {
+                SystemAudioAppPicker(
+                    manager: systemAudioManager,
+                    isDisabled: transcriptionManager.isRecording
+                )
+            }
+
             Button {
                 Task {
                     if transcriptionManager.isRecording {
-                        transcriptionManager.stopRecording()
+                        transcriptionManager.stopRecording(systemAudioManager: systemAudioManager)
                     } else {
-                        await transcriptionManager.startRecording()
+                        await transcriptionManager.startRecording(systemAudioManager: systemAudioManager)
                     }
                 }
             } label: {
@@ -33,7 +41,7 @@ struct ControlPanel: View {
             .controlSize(.large)
             .buttonStyle(.borderedProminent)
             .tint(transcriptionManager.isRecording ? .red : .accentColor)
-            
+
             Button {
                 transcriptionManager.clearText()
             } label: {
@@ -41,10 +49,10 @@ struct ControlPanel: View {
             }
             .controlSize(.large)
             .disabled(transcriptionManager.transcribedText.isEmpty)
-            
+
             Divider()
                 .frame(height: 24)
-            
+
             Button {
                 withAnimation {
                     showIPtalkPanel.toggle()
@@ -55,13 +63,13 @@ struct ControlPanel: View {
             .controlSize(.large)
             .buttonStyle(.bordered)
             .tint(showIPtalkPanel ? .blue : nil)
-            
+
             Spacer()
-            
+
             Text("\(transcriptionManager.transcribedText.count) 文字")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-            
+
             Button {
                 Task {
                     await transcriptionManager.saveToFile()
@@ -80,7 +88,8 @@ struct ControlPanel: View {
 #Preview {
     ControlPanel(
         transcriptionManager: TranscriptionManager(),
+        systemAudioManager: SystemAudioManager(),
         showIPtalkPanel: .constant(false)
     )
-    .frame(width: 600)
+    .frame(width: 800)
 }
