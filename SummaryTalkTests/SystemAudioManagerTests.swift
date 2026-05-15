@@ -47,3 +47,22 @@ final class SystemAudioAppChoiceTests: XCTestCase {
         XCTAssertEqual(result[1].displayName, "不明なアプリ (PID 300)")
     }
 }
+
+@MainActor
+final class SystemAudioManagerTests: XCTestCase {
+    func testRefreshSetsPermissionDeniedWhenPreflightFails() async {
+        var requestCalled = false
+        let manager = SystemAudioManager(
+            permissionCheck: { false },
+            requestPermission: { requestCalled = true }
+        )
+
+        await manager.refreshAvailableApps()
+
+        XCTAssertEqual(manager.lastErrorKind, .permissionDenied)
+        XCTAssertNotNil(manager.errorMessage)
+        XCTAssertFalse(manager.isRefreshing, "refresh完了後は isRefreshing が false に戻る")
+        XCTAssertTrue(requestCalled, "preflight 失敗時は requestPermission が呼ばれる")
+        XCTAssertTrue(manager.availableApps.isEmpty)
+    }
+}
