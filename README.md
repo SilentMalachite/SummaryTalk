@@ -94,6 +94,10 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 本ソフトウェアは開発中（Beta）です。音声認識の精度はネットワーク状況や周囲の騒音に依存します。IPtalk 互換実装は Phase 1 相当で、未検証の wire format がある点に注意してください。
 
+## 変更履歴
+
+リリースごとの変更点は [CHANGELOG.md](CHANGELOG.md) を参照してください。
+
 ## ライセンス
 
 [MIT License](LICENSE)
@@ -184,6 +188,10 @@ Under `SummaryTalkTests/`:
 ## Disclaimer
 
 This software is currently in Beta. Transcription accuracy depends on network conditions and ambient noise. The IPtalk-compatible implementation is at Phase 1 — some wire-format details remain unverified against real IPtalk packet captures.
+
+## Changelog
+
+See [CHANGELOG.md](CHANGELOG.md) for the per-release change history.
 
 ## License
 
