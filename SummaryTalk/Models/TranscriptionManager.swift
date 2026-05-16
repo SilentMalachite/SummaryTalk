@@ -201,6 +201,7 @@ final class TranscriptionManager {
             audioEngine.inputNode.removeTap(onBus: 0)
         case .systemAudio:
             if let systemAudioManager {
+                systemAudioManager.audioBufferHandler = nil
                 Task { await systemAudioManager.stopCapturing() }
             }
         }

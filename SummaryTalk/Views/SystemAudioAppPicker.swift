@@ -6,8 +6,6 @@ struct SystemAudioAppPicker: View {
     @Bindable var manager: SystemAudioManager
     var isDisabled: Bool = false
 
-    @State private var hasLoadedOnce = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
@@ -39,8 +37,7 @@ struct SystemAudioAppPicker: View {
             }
         }
         .task {
-            guard !hasLoadedOnce else { return }
-            hasLoadedOnce = true
+            guard manager.availableApps.isEmpty, manager.lastErrorKind == nil else { return }
             await manager.refreshAvailableApps()
         }
     }
