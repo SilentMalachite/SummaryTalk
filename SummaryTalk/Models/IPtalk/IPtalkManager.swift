@@ -1,4 +1,26 @@
 import Foundation
+import Network
+
+struct IPtalkMember: Identifiable, Hashable {
+    let id: String   // IP string; serves as identity
+    let name: String
+    let ip: String
+}
+
+enum IPtalkLineKind: Hashable {
+    case display
+    case monitor
+    case correction
+    case undo
+}
+
+struct IPtalkReceivedLine: Identifiable, Hashable {
+    let id: UUID
+    let kind: IPtalkLineKind
+    let sender: String
+    let text: String
+    let receivedAt: Date
+}
 
 @MainActor
 @Observable
