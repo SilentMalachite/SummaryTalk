@@ -34,4 +34,12 @@ enum IPtalkProtocol {
     static func decode(_ data: Data) -> String? {
         String(data: data, encoding: encoding)
     }
+
+    static func memberDiscoveryRequest(handleName: String) -> Data {
+        encode(line: handleName)
+    }
+
+    static func memberDiscoveryReply(handleName: String) -> Data {
+        encode(line: handleName)
+    }
 }

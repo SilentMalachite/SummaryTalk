@@ -69,4 +69,21 @@ final class IPtalkProtocolTests: XCTestCase {
     func testDecodeEmptyDataReturnsEmptyString() {
         XCTAssertEqual(IPtalkProtocol.decode(Data()), "")
     }
+
+    func testMemberDiscoveryRequestContainsHandleName() {
+        let data = IPtalkProtocol.memberDiscoveryRequest(handleName: "テスター")
+        let decoded = IPtalkProtocol.decode(data)
+        XCTAssertEqual(decoded?.trimmingCharacters(in: .newlines), "テスター")
+    }
+
+    func testMemberDiscoveryReplyContainsHandleName() {
+        let data = IPtalkProtocol.memberDiscoveryReply(handleName: "サマライズ")
+        let decoded = IPtalkProtocol.decode(data)
+        XCTAssertEqual(decoded?.trimmingCharacters(in: .newlines), "サマライズ")
+    }
+
+    func testMemberDiscoveryRequestHandlesEmptyHandle() {
+        let data = IPtalkProtocol.memberDiscoveryRequest(handleName: "")
+        XCTAssertFalse(data.isEmpty, "must still send something so peers can register our IP")
+    }
 }
