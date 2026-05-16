@@ -17,6 +17,8 @@ final class TranscriptionManager {
     var errorMessage: String?
     var authorizationStatus: SFSpeechRecognizerAuthorizationStatus = .notDetermined
     var audioSource: AudioSource = .microphone
+    var onFinalizedLine: ((String) -> Void)?
+    private var lastFinalizedText: String = ""
 
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -78,6 +80,7 @@ final class TranscriptionManager {
         recognitionTask = nil
         partialUpdateTask?.cancel()
         pendingTranscription = ""
+        lastFinalizedText = ""
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
 
@@ -113,6 +116,7 @@ final class TranscriptionManager {
         recognitionTask = nil
         partialUpdateTask?.cancel()
         pendingTranscription = ""
+        lastFinalizedText = ""
 
         recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
 
@@ -171,6 +175,7 @@ final class TranscriptionManager {
             partialUpdateTask?.cancel()
             transcribedText = text
             lastTranscriptionUpdate = Date()
+            emitFinalizedDelta(currentText: text)
             return
         }
 
@@ -191,6 +196,21 @@ final class TranscriptionManager {
                 self.transcribedText = self.pendingTranscription
                 self.lastTranscriptionUpdate = Date()
             }
+        }
+    }
+
+    private func emitFinalizedDelta(currentText: String) {
+        let delta: String
+        if currentText.hasPrefix(lastFinalizedText) {
+            delta = String(currentText.dropFirst(lastFinalizedText.count))
+        } else {
+            // Session restarted or recognizer reset — treat the whole text as new.
+            delta = currentText
+        }
+        lastFinalizedText = currentText
+        let trimmed = delta.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty {
+            onFinalizedLine?(trimmed)
         }
     }
 
@@ -220,6 +240,7 @@ final class TranscriptionManager {
     func clearText() {
         partialUpdateTask?.cancel()
         pendingTranscription = ""
+        lastFinalizedText = ""
         transcribedText = ""
     }
 
