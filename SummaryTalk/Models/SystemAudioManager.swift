@@ -47,7 +47,7 @@ final class SystemAudioManager: NSObject {
         guard permissionCheck() else {
             requestPermission()
             lastErrorKind = .permissionDenied
-            errorMessage = "画面収録の権限がありません。システム設定 > プライバシーとセキュリティ > 画面収録 で許可してください。"
+            errorMessage = "画面収録の権限がありません。システム設定 > プライバシーとセキュリティ > 画面収録 で許可後、アプリを再起動してください。"
             return
         }
 
@@ -60,6 +60,10 @@ final class SystemAudioManager: NSObject {
                 }
             }
             availableApps = filtered.isEmpty ? content.applications : filtered
+            if let current = selectedApp,
+               !availableApps.contains(where: { $0.processID == current.processID }) {
+                selectedApp = nil
+            }
             errorMessage = nil
             lastErrorKind = nil
         } catch {
@@ -73,7 +77,7 @@ final class SystemAudioManager: NSObject {
 
         guard permissionCheck() else {
             lastErrorKind = .permissionDenied
-            errorMessage = "画面収録の権限がありません。システム設定 > プライバシーとセキュリティ > 画面収録 で許可してください。"
+            errorMessage = "画面収録の権限がありません。システム設定 > プライバシーとセキュリティ > 画面収録 で許可後、アプリを再起動してください。"
             return
         }
 

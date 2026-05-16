@@ -32,7 +32,8 @@ struct SystemAudioAppPicker: View {
                 .help("対象アプリ一覧を更新")
             }
 
-            if let kind = manager.lastErrorKind, let message = manager.errorMessage {
+            if let kind = manager.lastErrorKind, kind != .captureFailed,
+               let message = manager.errorMessage {
                 errorView(kind: kind, message: message)
             }
         }
