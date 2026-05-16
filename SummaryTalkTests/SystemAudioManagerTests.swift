@@ -46,6 +46,18 @@ final class SystemAudioAppChoiceTests: XCTestCase {
         let result = makeChoices(from: apps)
         XCTAssertEqual(result[1].displayName, "不明なアプリ (PID 300)")
     }
+
+    func testMultipleDistinctAppsPreserveInputOrder() {
+        let apps = [
+            FakeApp(processID: 1, applicationName: "Slack", bundleIdentifier: "com.slack"),
+            FakeApp(processID: 2, applicationName: "Teams", bundleIdentifier: "com.microsoft.teams"),
+            FakeApp(processID: 3, applicationName: "Zoom",  bundleIdentifier: "us.zoom.xos")
+        ]
+        let result = makeChoices(from: apps)
+        XCTAssertEqual(result.map(\.choice),
+                       [.wholeDisplay, .app(processID: 1), .app(processID: 2), .app(processID: 3)])
+        XCTAssertEqual(result.dropFirst().map(\.displayName), ["Slack", "Teams", "Zoom"])
+    }
 }
 
 @MainActor
@@ -79,5 +91,50 @@ final class SystemAudioManagerTests: XCTestCase {
         XCTAssertNotNil(manager.errorMessage)
         XCTAssertFalse(manager.isCapturing)
         XCTAssertFalse(requestCalled, "startCapturing は preflight のみで requestPermission を呼ばない")
+    }
+
+    func testInitialStateIsIdle() {
+        let manager = SystemAudioManager(permissionCheck: { true }, requestPermission: {})
+        XCTAssertFalse(manager.isCapturing)
+        XCTAssertFalse(manager.isRefreshing)
+        XCTAssertNil(manager.errorMessage)
+        XCTAssertNil(manager.lastErrorKind)
+        XCTAssertTrue(manager.availableApps.isEmpty)
+        XCTAssertNil(manager.selectedApp)
+        XCTAssertNil(manager.audioBufferHandler)
+    }
+
+    func testStopCapturingWhenNotCapturingIsNoOp() async {
+        let manager = SystemAudioManager(permissionCheck: { true }, requestPermission: {})
+        // Preset error to confirm stopCapturing leaves it untouched when it short-circuits.
+        manager.errorMessage = "前回のエラー"
+        manager.lastErrorKind = .captureFailed
+
+        await manager.stopCapturing()
+
+        XCTAssertFalse(manager.isCapturing)
+        XCTAssertEqual(manager.errorMessage, "前回のエラー",
+                       "stopCapturing returns early when !isCapturing — must not touch state")
+        XCTAssertEqual(manager.lastErrorKind, .captureFailed)
+    }
+
+    func testRefreshAvailableAppsTwiceDeniedRequestsPermissionEachTime() async {
+        var requestCount = 0
+        let manager = SystemAudioManager(
+            permissionCheck: { false },
+            requestPermission: { requestCount += 1 }
+        )
+
+        await manager.refreshAvailableApps()
+        await manager.refreshAvailableApps()
+
+        XCTAssertEqual(requestCount, 2, "denial path re-prompts on every refresh attempt")
+        XCTAssertEqual(manager.lastErrorKind, .permissionDenied)
+    }
+
+    func testSystemAudioErrorKindEquatability() {
+        XCTAssertEqual(SystemAudioErrorKind.permissionDenied, .permissionDenied)
+        XCTAssertNotEqual(SystemAudioErrorKind.permissionDenied, .listingFailed)
+        XCTAssertNotEqual(SystemAudioErrorKind.captureFailed, .listingFailed)
     }
 }

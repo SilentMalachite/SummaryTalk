@@ -86,4 +86,29 @@ final class IPtalkProtocolTests: XCTestCase {
         let data = IPtalkProtocol.memberDiscoveryRequest(handleName: "")
         XCTAssertFalse(data.isEmpty, "must still send something so peers can register our IP")
     }
+
+    func testAllRolesYieldDistinctPortsPerChannel() {
+        for channel in 1...9 {
+            let ports = IPtalkPortRole.allCases.map { IPtalkProtocol.port(role: $0, channel: channel) }
+            XCTAssertEqual(Set(ports).count, ports.count, "channel \(channel): roles must map to unique ports")
+        }
+    }
+
+    func testChannelsDoNotOverlapForSameRole() {
+        let displayPorts = (1...9).map { IPtalkProtocol.port(role: .display, channel: $0) }
+        XCTAssertEqual(displayPorts, [6711, 6811, 6911, 7011, 7111, 7211, 7311, 7411, 7511])
+        XCTAssertEqual(Set(displayPorts).count, displayPorts.count)
+    }
+
+    func testDecodePreservesTrailingLF() {
+        let encoded = IPtalkProtocol.encode(line: "hi")
+        let decoded = IPtalkProtocol.decode(encoded)
+        XCTAssertEqual(decoded, "hi\n", "decode is byte-faithful — callers strip the LF themselves")
+    }
+
+    func testEncodeShiftJISBytesForKnownKanji() {
+        // 「あ」 = 0x82 0xA0 in Shift-JIS — guards against accidental encoding swap (e.g. to UTF-8).
+        let data = IPtalkProtocol.encode(line: "あ")
+        XCTAssertEqual(data, Data([0x82, 0xA0, 0x0a]))
+    }
 }

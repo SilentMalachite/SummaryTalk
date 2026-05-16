@@ -66,4 +66,53 @@ final class IPtalkManagerTests: XCTestCase {
         XCTAssertTrue(manager.isConnected, "still connected after second call")
         XCTAssertNil(manager.errorMessage)
     }
+
+    func testInitialStateIsIdle() {
+        let manager = IPtalkManager()
+        XCTAssertEqual(manager.channel, 1, "default channel is 1")
+        XCTAssertEqual(manager.handleName, "")
+        XCTAssertFalse(manager.isConnected)
+        XCTAssertTrue(manager.members.isEmpty)
+        XCTAssertTrue(manager.receivedLines.isEmpty)
+        XCTAssertEqual(manager.receivedText, "")
+        XCTAssertNil(manager.errorMessage)
+    }
+
+    func testStopListeningWhenNeverStartedIsSafe() {
+        let manager = IPtalkManager()
+        manager.stopListening()
+        XCTAssertFalse(manager.isConnected)
+        XCTAssertTrue(manager.members.isEmpty)
+        XCTAssertNil(manager.errorMessage)
+    }
+
+    func testSendBeforeStartIsNoOpAndDoesNotSetError() {
+        let manager = IPtalkManager()
+        manager.channel = 1
+
+        // All three send paths are guarded by `isConnected` — must silently no-op.
+        manager.sendDisplayLine("これは送られない")
+        manager.sendCorrection("これも送られない")
+        manager.sendUndo()
+
+        XCTAssertNil(manager.errorMessage, "unconnected sends are silent — they do not surface an error")
+        XCTAssertFalse(manager.isConnected)
+    }
+
+    func testStartListeningClearsExistingErrorMessage() async {
+        let manager = IPtalkManager()
+        manager.channel = 1
+        manager.errorMessage = "前回の残骸"
+        await manager.startListening()
+        defer { manager.stopListening() }
+
+        XCTAssertNil(manager.errorMessage, "startListening clears stale error message at the top")
+        XCTAssertTrue(manager.isConnected)
+    }
+
+    func testClearReceivedTextWhenEmptyIsSafe() {
+        let manager = IPtalkManager()
+        manager.clearReceivedText()
+        XCTAssertEqual(manager.receivedText, "")
+    }
 }
