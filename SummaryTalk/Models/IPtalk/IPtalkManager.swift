@@ -128,7 +128,6 @@ final class IPtalkManager {
 
     private func process(data: Data, role: IPtalkPortRole, sender: String) {
         guard let text = IPtalkProtocol.decode(data) else { return }
-        let stripped = text.trimmingCharacters(in: .newlines)
         switch role {
         case .display:
             appendLine(.display, sender: sender, text: text)
@@ -143,9 +142,9 @@ final class IPtalkManager {
             // A peer is asking "who's here?" — reply on memberReply (unicast).
             let replyPort = IPtalkProtocol.port(role: .memberReply, channel: channel)
             sendUnicast(IPtalkProtocol.memberDiscoveryReply(handleName: handleName), to: sender, port: replyPort)
-            addOrUpdateMember(ip: sender, name: stripped)
+            addOrUpdateMember(ip: sender, name: text.trimmingCharacters(in: .newlines))
         case .memberReply:
-            addOrUpdateMember(ip: sender, name: stripped)
+            addOrUpdateMember(ip: sender, name: text.trimmingCharacters(in: .newlines))
         }
     }
 
@@ -195,7 +194,7 @@ final class IPtalkManager {
     }
 
     func clearReceivedText() {
-        receivedLines.removeAll()
+        receivedLines.removeAll { $0.kind == .display }
     }
 
     private func sendBroadcast(_ data: Data, port: UInt16) {
@@ -214,10 +213,11 @@ final class IPtalkManager {
     }
 
     private func send(_ data: Data, on connection: NWConnection) {
-        connection.stateUpdateHandler = { state in
+        connection.stateUpdateHandler = { [weak connection] state in
+            guard let connection else { return }
             if case .ready = state {
-                connection.send(content: data, completion: .contentProcessed { _ in
-                    connection.cancel()
+                connection.send(content: data, completion: .contentProcessed { [weak connection] _ in
+                    connection?.cancel()
                 })
             }
         }
