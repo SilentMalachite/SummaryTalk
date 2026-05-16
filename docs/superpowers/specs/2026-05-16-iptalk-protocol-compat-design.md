@@ -206,6 +206,8 @@ LAN
 | 受信デコード失敗 | 当該行を破棄。errorMessageは出さない（騒音回避） |
 | ブロードキャストsend失敗 | `errorMessage` に「送信失敗: \(error)」、isConnectedは維持 |
 
+**Phase 1 note on port-in-use:** With `NWParameters.udp.allowLocalEndpointReuse = true` (set on every listener so the app can re-bind quickly across crashes/restarts), macOS allows multiple `NWListener`s to bind the same UDP port. The port-in-use rollback path in `startListening()`'s catch block is wired up correctly but is **unreachable in Phase 1** — the listener init does not throw. Two SummaryTalk instances on the same channel will coexist, both receiving every packet. The error message described in the table is dead code for now; it would activate if Phase 2 tightens the binding by dropping the reuse flag. Test `testSameChannelManagersCoexistDueToPortReuse` documents and pins this current behavior.
+
 ## 7. テスト戦略
 
 ### IPtalkProtocolTests.swift（新規・純粋関数）
