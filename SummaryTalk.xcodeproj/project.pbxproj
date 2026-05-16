@@ -18,6 +18,7 @@
 		A1000008 /* IPtalkPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000A /* IPtalkPanel.swift */; };
 		A1000009 /* SystemAudioManager.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000B /* SystemAudioManager.swift */; };
 		A1000010 /* IPtalkProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000C /* IPtalkProtocolTests.swift */; };
+		A1000021 /* IPtalkManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A2000021 /* IPtalkManagerTests.swift */; };
 		A100001A /* SystemAudioManagerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000D /* SystemAudioManagerTests.swift */; };
 		A100001B /* SystemAudioAppChoice.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000E /* SystemAudioAppChoice.swift */; };
 		A100001C /* SystemAudioAppPicker.swift in Sources */ = {isa = PBXBuildFile; fileRef = A200000F /* SystemAudioAppPicker.swift */; };
@@ -37,6 +38,7 @@
 		A200000A /* IPtalkPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPtalkPanel.swift; sourceTree = "<group>"; };
 		A200000B /* SystemAudioManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioManager.swift; sourceTree = "<group>"; };
 		A200000C /* IPtalkProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPtalkProtocolTests.swift; sourceTree = "<group>"; };
+		A2000021 /* IPtalkManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPtalkManagerTests.swift; sourceTree = "<group>"; };
 		A200000D /* SystemAudioManagerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioManagerTests.swift; sourceTree = "<group>"; };
 		A200000E /* SystemAudioAppChoice.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioAppChoice.swift; sourceTree = "<group>"; };
 		A200000F /* SystemAudioAppPicker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioAppPicker.swift; sourceTree = "<group>"; };
@@ -129,6 +131,7 @@
 			isa = PBXGroup;
 			children = (
 				A200000C /* IPtalkProtocolTests.swift */,
+				A2000021 /* IPtalkManagerTests.swift */,
 				A200000D /* SystemAudioManagerTests.swift */,
 			);
 			path = SummaryTalkTests;
@@ -242,6 +245,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				A1000010 /* IPtalkProtocolTests.swift in Sources */,
+				A1000021 /* IPtalkManagerTests.swift in Sources */,
 				A100001A /* SystemAudioManagerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

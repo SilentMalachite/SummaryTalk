@@ -213,12 +213,21 @@ final class IPtalkManager {
     }
 
     private func send(_ data: Data, on connection: NWConnection) {
-        connection.stateUpdateHandler = { [weak connection] state in
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let connection else { return }
-            if case .ready = state {
-                connection.send(content: data, completion: .contentProcessed { [weak connection] _ in
+            switch state {
+            case .ready:
+                connection.send(content: data, completion: .contentProcessed { [weak self, weak connection] error in
+                    if let error {
+                        Task { @MainActor in self?.errorMessage = "送信失敗: \(error.localizedDescription)" }
+                    }
                     connection?.cancel()
                 })
+            case .failed(let error):
+                Task { @MainActor in self?.errorMessage = "送信失敗: \(error.localizedDescription)" }
+                connection.cancel()
+            default:
+                break
             }
         }
         connection.start(queue: networkQueue)
