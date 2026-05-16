@@ -28,6 +28,13 @@ struct ContentView: View {
             }
         }
         .frame(minWidth: 600, minHeight: 400)
+        .onAppear {
+            transcriptionManager.onFinalizedLine = { [weak iptalkManager] line in
+                let autoSend = UserDefaults.standard.object(forKey: "iptalkAutoSend") as? Bool ?? true
+                guard autoSend, let manager = iptalkManager, manager.isConnected else { return }
+                manager.sendDisplayLine(line)
+            }
+        }
     }
 }
 
