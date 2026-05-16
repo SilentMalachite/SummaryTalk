@@ -26,4 +26,47 @@ final class IPtalkProtocolTests: XCTestCase {
         XCTAssertEqual(IPtalkProtocol.port(role: .display, channel: 10), 7511, "channel > 9 clamps to 9")
         XCTAssertEqual(IPtalkProtocol.port(role: .display, channel: -5), 6711)
     }
+
+    func testEncodeAsciiAddsLF() {
+        let data = IPtalkProtocol.encode(line: "hello")
+        XCTAssertEqual(data, Data([0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x0a]))
+    }
+
+    func testEncodeDoesNotDoubleLFWhenAlreadyTerminated() {
+        let data = IPtalkProtocol.encode(line: "hello\n")
+        XCTAssertEqual(data, Data([0x68, 0x65, 0x6c, 0x6c, 0x6f, 0x0a]))
+    }
+
+    func testEncodeEmptyStringIsJustLF() {
+        XCTAssertEqual(IPtalkProtocol.encode(line: ""), Data([0x0a]))
+    }
+
+    func testEncodeKanjiRoundTrip() {
+        let original = "こんにちは"
+        let encoded = IPtalkProtocol.encode(line: original)
+        let decoded = IPtalkProtocol.decode(encoded)
+        XCTAssertEqual(decoded?.trimmingCharacters(in: .newlines), original)
+    }
+
+    func testEncodeHalfwidthKanaRoundTrip() {
+        let original = "ｶﾀｶﾅ"
+        let encoded = IPtalkProtocol.encode(line: original)
+        let decoded = IPtalkProtocol.decode(encoded)
+        XCTAssertEqual(decoded?.trimmingCharacters(in: .newlines), original)
+    }
+
+    func testEncodeEmojiFallsBackLossy() {
+        // Emoji has no Shift-JIS representation; encode must not crash and must produce
+        // bytes that decode back to *something* (lossy '?' replacement is acceptable).
+        let encoded = IPtalkProtocol.encode(line: "abc😀def")
+        XCTAssertFalse(encoded.isEmpty)
+        let decoded = IPtalkProtocol.decode(encoded)
+        XCTAssertNotNil(decoded)
+        XCTAssertTrue(decoded!.contains("abc"))
+        XCTAssertTrue(decoded!.contains("def"))
+    }
+
+    func testDecodeEmptyDataReturnsEmptyString() {
+        XCTAssertEqual(IPtalkProtocol.decode(Data()), "")
+    }
 }

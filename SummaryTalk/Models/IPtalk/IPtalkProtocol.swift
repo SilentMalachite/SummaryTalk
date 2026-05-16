@@ -23,4 +23,15 @@ enum IPtalkProtocol {
         let clamped = max(1, min(9, channel))
         return base + UInt16(clamped - 1) * 100
     }
+
+    static let encoding: String.Encoding = .shiftJIS
+
+    static func encode(line: String) -> Data {
+        let terminated = line.hasSuffix("\n") ? line : line + "\n"
+        return terminated.data(using: encoding, allowLossyConversion: true) ?? Data()
+    }
+
+    static func decode(_ data: Data) -> String? {
+        String(data: data, encoding: encoding)
+    }
 }
