@@ -32,8 +32,8 @@
 		A2000006 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		A2000007 /* SummaryTalk.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = SummaryTalk.entitlements; sourceTree = "<group>"; };
 		A2000008 /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
-		A2000009 /* IPtalkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPtalk/IPtalkManager.swift; sourceTree = "<group>"; };
-		A2000020 /* IPtalkProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPtalk/IPtalkProtocol.swift; sourceTree = "<group>"; };
+		A2000009 /* IPtalkManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPtalkManager.swift; sourceTree = "<group>"; };
+		A2000020 /* IPtalkProtocol.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPtalkProtocol.swift; sourceTree = "<group>"; };
 		A200000A /* IPtalkPanel.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPtalkPanel.swift; sourceTree = "<group>"; };
 		A200000B /* SystemAudioManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SystemAudioManager.swift; sourceTree = "<group>"; };
 		A200000C /* IPtalkProtocolTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = IPtalkProtocolTests.swift; sourceTree = "<group>"; };
@@ -89,12 +89,20 @@
 			isa = PBXGroup;
 			children = (
 				A2000003 /* TranscriptionManager.swift */,
-				A2000009 /* IPtalkManager.swift */,
-				A2000020 /* IPtalkProtocol.swift */,
+				A5000020 /* IPtalk */,
 				A200000B /* SystemAudioManager.swift */,
 				A200000E /* SystemAudioAppChoice.swift */,
 			);
 			path = Models;
+			sourceTree = "<group>";
+		};
+		A5000020 /* IPtalk */ = {
+			isa = PBXGroup;
+			children = (
+				A2000020 /* IPtalkProtocol.swift */,
+				A2000009 /* IPtalkManager.swift */,
+			);
+			path = IPtalk;
 			sourceTree = "<group>";
 		};
 		A5000004 /* Views */ = {
