@@ -3,47 +3,46 @@ import SwiftUI
 struct IPtalkPanel: View {
     @Bindable var iptalkManager: IPtalkManager
     @Binding var textToSend: String
-    
-    @State private var portText: String = "15000"
-    
+
+    @AppStorage("iptalkHandleName") private var handleName: String = ""
+    @AppStorage("iptalkChannel") private var channel: Int = 1
+    @AppStorage("iptalkAutoSend") private var autoSend: Bool = true
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Text("IPtalk接続")
                     .font(.headline)
-                
                 Spacer()
-                
                 Circle()
                     .fill(iptalkManager.isConnected ? .green : .gray)
                     .frame(width: 10, height: 10)
-                
                 Text(iptalkManager.isConnected ? "接続中" : "未接続")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            
+
             HStack {
-                Text("ポート:")
+                Text("チャンネル:")
                     .foregroundStyle(.secondary)
-                
-                TextField("15000", text: $portText)
-                    .frame(width: 80)
-                    .textFieldStyle(.roundedBorder)
-                    .disabled(iptalkManager.isConnected)
-                
+                Picker("", selection: $channel) {
+                    ForEach(1...9, id: \.self) { ch in
+                        Text("\(ch)").tag(ch)
+                    }
+                }
+                .pickerStyle(.menu)
+                .frame(width: 80)
+                .disabled(iptalkManager.isConnected)
+
                 Spacer()
-                
+
                 Button {
                     Task {
                         if iptalkManager.isConnected {
                             iptalkManager.stopListening()
                         } else {
-                            guard let portValue = UInt16(portText), portValue > 0 else {
-                                iptalkManager.errorMessage = "1〜65535のポート番号を入力してください"
-                                return
-                            }
-                            iptalkManager.updatePort(portValue)
+                            iptalkManager.channel = channel
+                            iptalkManager.handleName = resolvedHandleName
                             await iptalkManager.startListening()
                         }
                     }
@@ -54,44 +53,60 @@ struct IPtalkPanel: View {
                 .buttonStyle(.borderedProminent)
                 .tint(iptalkManager.isConnected ? .red : .blue)
             }
-            
-            if !iptalkManager.connectedPartners.isEmpty {
+
+            HStack {
+                Text("ハンドル名:")
+                    .foregroundStyle(.secondary)
+                TextField("自動 (\(autoHandleName))", text: $handleName)
+                    .textFieldStyle(.roundedBorder)
+                    .disabled(iptalkManager.isConnected)
+            }
+
+            Toggle("認識結果を自動送信", isOn: $autoSend)
+                .toggleStyle(.switch)
+
+            if !iptalkManager.members.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
-                    Text("接続パートナー:")
+                    Text("メンバー一覧:")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    
-                    ForEach(iptalkManager.connectedPartners, id: \.self) { partner in
-                        Text(partner)
-                            .font(.caption)
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(Color.blue.opacity(0.1))
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                    ForEach(iptalkManager.members) { member in
+                        HStack {
+                            Text(member.name)
+                                .font(.caption.bold())
+                            Text(member.ip)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 2)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.blue.opacity(0.1))
+                        .clipShape(RoundedRectangle(cornerRadius: 4))
                     }
                 }
             }
-            
+
             if let error = iptalkManager.errorMessage {
                 Text(error)
                     .font(.caption)
                     .foregroundStyle(.red)
             }
-            
+
             Divider()
-            
+
             HStack {
                 Button {
                     if !textToSend.isEmpty {
-                        iptalkManager.sendText(textToSend)
+                        iptalkManager.sendDisplayLine(textToSend)
                     }
                 } label: {
                     Label("IPtalkに送信", systemImage: "paperplane.fill")
                 }
                 .disabled(!iptalkManager.isConnected || textToSend.isEmpty)
-                
+
                 Spacer()
-                
+
                 Button {
                     iptalkManager.clearReceivedText()
                 } label: {
@@ -99,13 +114,12 @@ struct IPtalkPanel: View {
                 }
                 .disabled(iptalkManager.receivedText.isEmpty)
             }
-            
+
             if !iptalkManager.receivedText.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {
                     Text("受信テキスト:")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    
                     ScrollView {
                         Text(iptalkManager.receivedText)
                             .font(.body)
@@ -121,9 +135,15 @@ struct IPtalkPanel: View {
         .padding()
         .background(Color(nsColor: .controlBackgroundColor))
         .clipShape(RoundedRectangle(cornerRadius: 12))
-        .onAppear {
-            portText = String(iptalkManager.port)
-        }
+    }
+
+    private var autoHandleName: String {
+        let host = ProcessInfo.processInfo.hostName
+        return host.components(separatedBy: ".").first ?? "SummaryTalk"
+    }
+
+    private var resolvedHandleName: String {
+        handleName.trimmingCharacters(in: .whitespaces).isEmpty ? autoHandleName : handleName
     }
 }
 
