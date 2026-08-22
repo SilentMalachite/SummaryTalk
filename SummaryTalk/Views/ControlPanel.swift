@@ -26,7 +26,7 @@ struct ControlPanel: View {
             Button {
                 Task {
                     if transcriptionManager.isRecording {
-                        transcriptionManager.stopRecording(systemAudioManager: systemAudioManager)
+                        await transcriptionManager.stopRecording(systemAudioManager: systemAudioManager)
                     } else {
                         await transcriptionManager.startRecording(systemAudioManager: systemAudioManager)
                     }

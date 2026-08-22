@@ -28,6 +28,8 @@
 	<string>音声認識のためにマイクへのアクセスが必要です。</string>
 	<key>NSSpeechRecognitionUsageDescription</key>
 	<string>リアルタイム文字起こしのために音声認識へのアクセスが必要です。</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>IPtalk互換の文字配信のため、同一ネットワーク上の他の端末と通信します。</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
 </dict>

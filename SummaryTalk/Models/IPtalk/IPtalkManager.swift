@@ -31,6 +31,7 @@ final class IPtalkManager {
 
     // Observable state
     private(set) var isConnected: Bool = false
+    private(set) var isConnecting: Bool = false
     private(set) var members: [IPtalkMember] = []
     private(set) var receivedLines: [IPtalkReceivedLine] = []
     var errorMessage: String?
@@ -42,14 +43,23 @@ final class IPtalkManager {
 
     private var listeners: [IPtalkPortRole: NWListener] = [:]
     private let networkQueue = DispatchQueue(label: "com.summarytalk.iptalk", qos: .userInitiated)
+    private var pendingReadyRoles: Set<IPtalkPortRole> = []
+    private var startupContinuation: CheckedContinuation<Void, Error>?
+    private var startupGeneration: UInt64 = 0
+    private var startupTimeoutTask: Task<Void, Never>?
+    var startupTimeoutNanoseconds: UInt64 = 5_000_000_000
 
     init() {}
 
     // MARK: - Lifecycle
 
     func startListening() async {
-        guard !isConnected else { return }
+        guard !isConnected, !isConnecting else { return }
+        isConnecting = true
+        defer { isConnecting = false }
         errorMessage = nil
+        startupGeneration += 1
+        let generation = startupGeneration
 
         var opened: [IPtalkPortRole: NWListener] = [:]
         for role in IPtalkPortRole.allCases {
@@ -63,14 +73,10 @@ final class IPtalkManager {
                     Task { @MainActor in self?.handleIncoming(conn, role: role) }
                 }
                 listener.stateUpdateHandler = { [weak self] state in
-                    if case .failed(let err) = state {
-                        Task { @MainActor in
-                            self?.errorMessage = "ポート \(portNum) リスナエラー: \(err.localizedDescription)"
-                            self?.tearDown()
-                        }
+                    Task { @MainActor in
+                        self?.handleListenerState(state, role: role, portNum: portNum, generation: generation)
                     }
                 }
-                listener.start(queue: networkQueue)
                 opened[role] = listener
             } catch {
                 opened.values.forEach { $0.cancel() }
@@ -79,6 +85,17 @@ final class IPtalkManager {
             }
         }
         listeners = opened
+
+        do {
+            try await waitUntilListenersReady(roles: Set(opened.keys), generation: generation)
+        } catch {
+            tearDown()
+            if errorMessage == nil {
+                errorMessage = "接続に失敗しました: \(error.localizedDescription)"
+            }
+            return
+        }
+
         isConnected = true
         await refreshMembers()
     }
@@ -87,9 +104,78 @@ final class IPtalkManager {
         tearDown()
     }
 
+    private func waitUntilListenersReady(roles: Set<IPtalkPortRole>, generation: UInt64) async throws {
+        startupTimeoutTask?.cancel()
+
+        try await withCheckedThrowingContinuation { continuation in
+            startupContinuation = continuation
+            pendingReadyRoles = roles
+            listeners.values.forEach { $0.start(queue: networkQueue) }
+            finishStartupIfPossible()
+
+            startupTimeoutTask = Task { @MainActor in
+                try? await Task.sleep(nanoseconds: startupTimeoutNanoseconds)
+                guard !Task.isCancelled else { return }
+                applyStartupTimeout(generation: generation)
+            }
+        }
+    }
+
+    func applyStartupTimeout(generation: UInt64) {
+        guard generation == startupGeneration else { return }
+        guard let pending = startupContinuation else { return }
+        startupContinuation = nil
+        errorMessage = "接続がタイムアウトしました"
+        pending.resume(throwing: NSError(
+            domain: "IPtalkManager",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "接続がタイムアウトしました"]
+        ))
+    }
+
+    private func handleListenerState(
+        _ state: NWListener.State,
+        role: IPtalkPortRole,
+        portNum: UInt16,
+        generation: UInt64
+    ) {
+        guard generation == startupGeneration else { return }
+        switch state {
+        case .ready:
+            pendingReadyRoles.remove(role)
+            finishStartupIfPossible()
+        case .failed(let err):
+            errorMessage = "ポート \(portNum) リスナエラー: \(err.localizedDescription)"
+            if let pending = startupContinuation {
+                startupContinuation = nil
+                pending.resume(throwing: err)
+            } else if isConnected {
+                tearDown()
+            }
+        default:
+            break
+        }
+    }
+
+    private func finishStartupIfPossible() {
+        guard pendingReadyRoles.isEmpty, let pending = startupContinuation else { return }
+        startupContinuation = nil
+        startupTimeoutTask?.cancel()
+        startupTimeoutTask = nil
+        pending.resume()
+    }
+
     private func tearDown() {
+        startupGeneration += 1
+        startupTimeoutTask?.cancel()
+        startupTimeoutTask = nil
+        if let pending = startupContinuation {
+            startupContinuation = nil
+            pending.resume(throwing: CancellationError())
+        }
         listeners.values.forEach { $0.cancel() }
         listeners.removeAll()
+        pendingReadyRoles.removeAll()
         isConnected = false
         members.removeAll()
     }

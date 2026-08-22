@@ -9,16 +9,43 @@ enum AudioSource: String, CaseIterable {
     case systemAudio = "システム音声（Zoom等）"
 }
 
+enum RecordingPhase: Equatable {
+    case idle
+    case starting
+    case running
+    case stopping
+}
+
+final class RecognitionRequestBox: @unchecked Sendable {
+    private let lock = NSLock()
+    private var request: SFSpeechAudioBufferRecognitionRequest?
+
+    func set(_ request: SFSpeechAudioBufferRecognitionRequest?) {
+        lock.lock()
+        self.request = request
+        lock.unlock()
+    }
+
+    func append(_ buffer: AVAudioPCMBuffer) {
+        lock.lock()
+        let current = request
+        lock.unlock()
+        current?.append(buffer)
+    }
+}
+
 @MainActor
 @Observable
 final class TranscriptionManager {
     var transcribedText: String = ""
     var isRecording: Bool = false
+    private(set) var recordingPhase: RecordingPhase = .idle
     var errorMessage: String?
     var authorizationStatus: SFSpeechRecognizerAuthorizationStatus = .notDetermined
     var audioSource: AudioSource = .microphone
     var onFinalizedLine: ((String) -> Void)?
     private var lastFinalizedText: String = ""
+    private var committedText: String = ""
 
     private var recognitionTask: SFSpeechRecognitionTask?
     private var recognitionRequest: SFSpeechAudioBufferRecognitionRequest?
@@ -29,6 +56,10 @@ final class TranscriptionManager {
     private var partialUpdateTask: Task<Void, Never>?
     private let partialUpdateInterval: TimeInterval = 0.25
     private let audioBufferSize: AVAudioFrameCount = 2048
+    private let requestBox = RecognitionRequestBox()
+    private var recognitionGeneration: UInt64 = 0
+    private var tapInstalled = false
+    private var captureStopObserver: (any SystemAudioCapturing)?
 
     init() {
         speechRecognizer = SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))
@@ -42,8 +73,8 @@ final class TranscriptionManager {
         }
     }
 
-    func startRecording(systemAudioManager: SystemAudioManager? = nil) async {
-        guard !isRecording else { return }
+    func startRecording(systemAudioManager: (any SystemAudioCapturing)? = nil) async {
+        guard !isRecording, recordingPhase == .idle else { return }
 
         if authorizationStatus != .authorized {
             await requestAuthorization()
@@ -59,127 +90,157 @@ final class TranscriptionManager {
             return
         }
 
+        recordingPhase = .starting
+        isRecording = true
+
         do {
             switch audioSource {
             case .microphone:
                 try startMicrophoneRecording()
             case .systemAudio:
                 guard let systemAudioManager else {
-                    errorMessage = "システム音声マネージャが提供されていません"
-                    return
+                    throw NSError(
+                        domain: "TranscriptionManager",
+                        code: 3,
+                        userInfo: [NSLocalizedDescriptionKey: "システム音声マネージャが提供されていません"]
+                    )
                 }
                 try await startSystemAudioRecording(systemAudioManager: systemAudioManager)
             }
+            guard recordingPhase == .starting else {
+                await systemAudioManager?.stopCapturing()
+                return
+            }
+            recordingPhase = .running
+            errorMessage = nil
         } catch {
+            if recordingPhase == .idle {
+                return
+            }
+            await rollbackStart(systemAudioManager: systemAudioManager)
             errorMessage = "録音の開始に失敗しました: \(error.localizedDescription)"
         }
     }
 
     private func startMicrophoneRecording() throws {
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        partialUpdateTask?.cancel()
-        pendingTranscription = ""
-        lastFinalizedText = ""
+        resetRecognitionStateForNewSession()
 
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-
-        guard let recognitionRequest else {
-            throw NSError(domain: "TranscriptionManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "認識リクエストを作成できません"])
+        let recordingFormat = audioEngine.inputNode.outputFormat(forBus: 0)
+        guard recordingFormat.sampleRate > 0, recordingFormat.channelCount > 0 else {
+            throw NSError(
+                domain: "TranscriptionManager",
+                code: 4,
+                userInfo: [NSLocalizedDescriptionKey: "マイクが利用できません。システム設定からマイクへのアクセスを許可してください。"]
+            )
         }
 
-        recognitionRequest.shouldReportPartialResults = true
-        recognitionRequest.addsPunctuation = true
-        recognitionRequest.taskHint = .dictation
-        if speechRecognizer?.supportsOnDeviceRecognition == true {
-            recognitionRequest.requiresOnDeviceRecognition = true
+        let box = requestBox
+        audioEngine.inputNode.installTap(onBus: 0, bufferSize: audioBufferSize, format: recordingFormat) { buffer, _ in
+            box.append(buffer)
         }
+        tapInstalled = true
 
-        let inputNode = audioEngine.inputNode
-        let recordingFormat = inputNode.outputFormat(forBus: 0)
-
-        inputNode.installTap(onBus: 0, bufferSize: audioBufferSize, format: recordingFormat) { [weak self] buffer, _ in
-            self?.recognitionRequest?.append(buffer)
+        do {
+            beginRecognitionRequest()
+            audioEngine.prepare()
+            try audioEngine.start()
+        } catch {
+            removeMicrophoneTapIfNeeded()
+            abandonRecognitionRequest()
+            throw error
         }
-
-        audioEngine.prepare()
-        try audioEngine.start()
-
-        isRecording = true
-        errorMessage = nil
-
-        startRecognitionTask()
     }
 
-    private func startSystemAudioRecording(systemAudioManager: SystemAudioManager) async throws {
-        recognitionTask?.cancel()
-        recognitionTask = nil
-        partialUpdateTask?.cancel()
-        pendingTranscription = ""
-        lastFinalizedText = ""
+    private func startSystemAudioRecording(systemAudioManager: any SystemAudioCapturing) async throws {
+        resetRecognitionStateForNewSession()
+        beginRecognitionRequest()
 
-        recognitionRequest = SFSpeechAudioBufferRecognitionRequest()
-
-        guard let recognitionRequest else {
-            throw NSError(domain: "TranscriptionManager", code: 1, userInfo: [NSLocalizedDescriptionKey: "認識リクエストを作成できません"])
+        let box = requestBox
+        systemAudioManager.audioBufferHandler = { buffer in
+            box.append(buffer)
         }
-
-        recognitionRequest.shouldReportPartialResults = true
-        recognitionRequest.addsPunctuation = true
-        recognitionRequest.taskHint = .dictation
-        if speechRecognizer?.supportsOnDeviceRecognition == true {
-            recognitionRequest.requiresOnDeviceRecognition = true
+        systemAudioManager.onStreamStopped = { [weak self] error in
+            Task { @MainActor in
+                await self?.handleCaptureStopped(error: error, systemAudioManager: systemAudioManager)
+            }
         }
-
-        systemAudioManager.audioBufferHandler = { [weak self] buffer in
-            self?.recognitionRequest?.append(buffer)
-        }
+        captureStopObserver = systemAudioManager
 
         await systemAudioManager.startCapturing()
 
         if let error = systemAudioManager.errorMessage {
+            systemAudioManager.audioBufferHandler = nil
+            systemAudioManager.onStreamStopped = nil
+            captureStopObserver = nil
+            abandonRecognitionRequest()
             throw NSError(domain: "TranscriptionManager", code: 2, userInfo: [NSLocalizedDescriptionKey: error])
         }
-
-        isRecording = true
-        errorMessage = nil
-
-        startRecognitionTask()
     }
 
-    private func startRecognitionTask() {
+    private func resetRecognitionStateForNewSession() {
+        recognitionTask?.cancel()
+        recognitionTask = nil
+        partialUpdateTask?.cancel()
+        pendingTranscription = ""
+        lastFinalizedText = ""
+        committedText = ""
+        requestBox.set(nil)
+        recognitionRequest = nil
+    }
+
+    private func beginRecognitionRequest() {
+        recognitionGeneration += 1
+        let generation = recognitionGeneration
+
+        let request = SFSpeechAudioBufferRecognitionRequest()
+        request.shouldReportPartialResults = true
+        request.addsPunctuation = true
+        request.taskHint = .dictation
+        if speechRecognizer?.supportsOnDeviceRecognition == true {
+            request.requiresOnDeviceRecognition = true
+        }
+
+        recognitionRequest = request
+        requestBox.set(request)
+        startRecognitionTask(generation: generation)
+    }
+
+    private func startRecognitionTask(generation: UInt64) {
         guard let speechRecognizer, let recognitionRequest else { return }
 
         recognitionTask = speechRecognizer.recognitionTask(with: recognitionRequest) { [weak self] result, error in
             Task { @MainActor in
-                guard let self else { return }
+                guard let self, generation == self.recognitionGeneration else { return }
 
                 if let result {
                     self.handleRecognitionUpdate(text: result.bestTranscription.formattedString, isFinal: result.isFinal)
                 }
 
-                if let error {
-                    let nsError = error as NSError
-                    // Ignore "No speech detected" errors (code 1110)
-                    if nsError.domain != "kAFAssistantErrorDomain" || nsError.code != 1110 {
-                        self.errorMessage = error.localizedDescription
-                    }
+                if result?.isFinal != true, let error {
+                    self.handleRecognitionError(error)
                 }
             }
         }
     }
 
-    private func handleRecognitionUpdate(text: String, isFinal: Bool) {
-        guard text != transcribedText else { return }
+    func handleRecognitionUpdate(text: String, isFinal: Bool) {
         if isFinal {
             partialUpdateTask?.cancel()
-            transcribedText = text
-            lastTranscriptionUpdate = Date()
+            let display = Self.joinedDisplay(committed: committedText, current: text)
+            if transcribedText != display {
+                transcribedText = display
+            }
+            lastTranscriptionUpdate = .distantPast
             emitFinalizedDelta(currentText: text)
+            committedText = display
+            rearmRecognitionIfNeeded()
             return
         }
 
-        pendingTranscription = text
+        let display = Self.joinedDisplay(committed: committedText, current: text)
+        guard display != transcribedText else { return }
+
+        pendingTranscription = display
         let now = Date()
         if now.timeIntervalSince(lastTranscriptionUpdate) >= partialUpdateInterval {
             transcribedText = pendingTranscription
@@ -199,12 +260,27 @@ final class TranscriptionManager {
         }
     }
 
+    private func handleRecognitionError(_ error: Error) {
+        let nsError = error as NSError
+        let isNoSpeech = nsError.domain == "kAFAssistantErrorDomain" && nsError.code == 1110
+        if !isNoSpeech {
+            errorMessage = error.localizedDescription
+        }
+        rearmRecognitionIfNeeded()
+    }
+
+    private func rearmRecognitionIfNeeded() {
+        guard isRecording, recordingPhase == .running, recognitionRequest != nil else { return }
+        lastFinalizedText = ""
+        recognitionTask = nil
+        beginRecognitionRequest()
+    }
+
     private func emitFinalizedDelta(currentText: String) {
         let delta: String
         if currentText.hasPrefix(lastFinalizedText) {
             delta = String(currentText.dropFirst(lastFinalizedText.count))
         } else {
-            // Session restarted or recognizer reset — treat the whole text as new.
             delta = currentText
         }
         lastFinalizedText = currentText
@@ -214,33 +290,73 @@ final class TranscriptionManager {
         }
     }
 
-    func stopRecording(systemAudioManager: SystemAudioManager? = nil) {
-        switch audioSource {
-        case .microphone:
+    static func joinedDisplay(committed: String, current: String) -> String {
+        if committed.isEmpty { return current }
+        if current.isEmpty { return committed }
+        return committed + current
+    }
+
+    func stopRecording(systemAudioManager: (any SystemAudioCapturing)? = nil) async {
+        guard recordingPhase == .starting || recordingPhase == .running || isRecording else { return }
+        recordingPhase = .stopping
+        await tearDownSession(systemAudioManager: systemAudioManager)
+    }
+
+    private func handleCaptureStopped(error: Error, systemAudioManager: any SystemAudioCapturing) async {
+        guard recordingPhase == .running || recordingPhase == .starting else { return }
+        errorMessage = "ストリームエラー: \(error.localizedDescription)"
+        await stopRecording(systemAudioManager: systemAudioManager)
+    }
+
+    private func rollbackStart(systemAudioManager: (any SystemAudioCapturing)?) async {
+        await tearDownSession(systemAudioManager: systemAudioManager)
+    }
+
+    private func tearDownSession(systemAudioManager: (any SystemAudioCapturing)?) async {
+        recognitionGeneration += 1
+        requestBox.set(nil)
+
+        removeMicrophoneTapIfNeeded()
+        if audioEngine.isRunning {
             audioEngine.stop()
-            audioEngine.inputNode.removeTap(onBus: 0)
-        case .systemAudio:
-            if let systemAudioManager {
-                systemAudioManager.audioBufferHandler = nil
-                Task { await systemAudioManager.stopCapturing() }
-            }
         }
+
+        let audioManager = systemAudioManager ?? captureStopObserver
+        if let audioManager {
+            audioManager.audioBufferHandler = nil
+            audioManager.onStreamStopped = nil
+            await audioManager.stopCapturing()
+        }
+        captureStopObserver = nil
 
         partialUpdateTask?.cancel()
         pendingTranscription = ""
 
+        abandonRecognitionRequest()
+
+        recordingPhase = .idle
+        isRecording = false
+    }
+
+    private func abandonRecognitionRequest() {
+        requestBox.set(nil)
         recognitionRequest?.endAudio()
         recognitionTask?.cancel()
-
         recognitionRequest = nil
         recognitionTask = nil
-        isRecording = false
+    }
+
+    private func removeMicrophoneTapIfNeeded() {
+        guard tapInstalled else { return }
+        audioEngine.inputNode.removeTap(onBus: 0)
+        tapInstalled = false
     }
 
     func clearText() {
         partialUpdateTask?.cancel()
         pendingTranscription = ""
         lastFinalizedText = ""
+        committedText = ""
         transcribedText = ""
     }
 

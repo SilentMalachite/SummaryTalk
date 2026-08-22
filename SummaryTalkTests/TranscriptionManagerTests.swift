@@ -29,17 +29,60 @@ final class TranscriptionManagerTests: XCTestCase {
         XCTAssertEqual(manager.transcribedText, "")
     }
 
-    func testStopRecordingWhenIdleIsSafe() {
+    func testStopRecordingWhenIdleIsSafe() async {
         let manager = TranscriptionManager()
-        manager.stopRecording()
+        await manager.stopRecording()
         XCTAssertFalse(manager.isRecording)
         XCTAssertNil(manager.errorMessage)
     }
 
-    /// `startRecording` short-circuits when already recording. We can't drive the real
-    /// SFSpeechRecognizer + AVAudioEngine pipeline in a unit test, but we *can* verify
-    /// the early-return contract by force-flipping `isRecording` and asserting no error
-    /// path runs (no permission prompt, no errorMessage mutation).
+    func testStopDuringSystemAudioStartDoesNotResumeRecording() async throws {
+        try XCTSkipUnless(
+            SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))?.isAvailable == true,
+            "ja-JP speech recognizer is required"
+        )
+
+        let capture = GatedSystemAudioCapture()
+        let manager = TranscriptionManager()
+        manager.audioSource = .systemAudio
+        manager.authorizationStatus = .authorized
+
+        let started = Task {
+            await manager.startRecording(systemAudioManager: capture)
+        }
+
+        let deadline = Date().addingTimeInterval(2)
+        while !manager.isRecording, Date() < deadline {
+            await Task.yield()
+        }
+        XCTAssertTrue(manager.isRecording, "start marks recording before capture resumes")
+
+        await manager.stopRecording(systemAudioManager: capture)
+        await started.value
+
+        XCTAssertFalse(manager.isRecording, "a stop during startCapturing must not resurrect recording")
+        XCTAssertEqual(manager.recordingPhase, .idle, "await after startCapturing must not force .running")
+        XCTAssertFalse(capture.isCapturing, "capture must not keep running after stop")
+    }
+
+    func testFailedSystemAudioStartLeavesIdle() async throws {
+        try XCTSkipUnless(
+            SFSpeechRecognizer(locale: Locale(identifier: "ja-JP"))?.isAvailable == true,
+            "ja-JP speech recognizer is required"
+        )
+
+        let capture = FailingSystemAudioCapture()
+        let manager = TranscriptionManager()
+        manager.audioSource = .systemAudio
+        manager.authorizationStatus = .authorized
+
+        await manager.startRecording(systemAudioManager: capture)
+
+        XCTAssertFalse(manager.isRecording)
+        XCTAssertEqual(manager.recordingPhase, .idle)
+        XCTAssertNotNil(manager.errorMessage)
+    }
+
     func testStartRecordingNoOpsWhenAlreadyRecording() async {
         let manager = TranscriptionManager()
         manager.isRecording = true
@@ -62,6 +105,64 @@ final class TranscriptionManagerTests: XCTestCase {
         XCTAssertEqual(received, ["一行目", "二行目"])
     }
 
+    /// The last partial is often identical to the subsequent `isFinal` result.
+    /// Auto-send (`onFinalizedLine`) must still fire in that case.
+    func testFinalMatchingLastPartialStillEmitsFinalizedLine() {
+        let manager = TranscriptionManager()
+        var received: [String] = []
+        manager.onFinalizedLine = { received.append($0) }
+
+        manager.handleRecognitionUpdate(text: "こんにちは", isFinal: false)
+        manager.handleRecognitionUpdate(text: "こんにちは", isFinal: true)
+
+        XCTAssertEqual(received, ["こんにちは"])
+        XCTAssertEqual(manager.transcribedText, "こんにちは")
+    }
+
+    func testIdenticalFinalDoesNotEmitTwice() {
+        let manager = TranscriptionManager()
+        var received: [String] = []
+        manager.onFinalizedLine = { received.append($0) }
+
+        manager.handleRecognitionUpdate(text: "こんにちは", isFinal: true)
+        manager.handleRecognitionUpdate(text: "こんにちは", isFinal: true)
+
+        XCTAssertEqual(received, ["こんにちは"])
+    }
+
+    func testSubsequentUtteranceAppendsToCommittedText() {
+        let manager = TranscriptionManager()
+        manager.handleRecognitionUpdate(text: "こんにちは", isFinal: true)
+        manager.handleRecognitionUpdate(text: "世界", isFinal: false)
+        XCTAssertEqual(manager.transcribedText, "こんにちは世界")
+    }
+
+    func testSecondFinalEmitsOnlyNewUtterance() {
+        let manager = TranscriptionManager()
+        var received: [String] = []
+        manager.onFinalizedLine = { received.append($0) }
+
+        manager.handleRecognitionUpdate(text: "こんにちは", isFinal: true)
+        manager.handleRecognitionUpdate(text: "世界", isFinal: true)
+
+        XCTAssertEqual(received, ["こんにちは", "世界"])
+        XCTAssertEqual(manager.transcribedText, "こんにちは世界")
+    }
+
+    func testClearTextResetsCommittedUtterances() {
+        let manager = TranscriptionManager()
+        manager.handleRecognitionUpdate(text: "こんにちは", isFinal: true)
+        manager.clearText()
+        manager.handleRecognitionUpdate(text: "世界", isFinal: false)
+        XCTAssertEqual(manager.transcribedText, "世界")
+    }
+
+    func testJoinedDisplayConcatenatesCommittedAndCurrent() {
+        XCTAssertEqual(TranscriptionManager.joinedDisplay(committed: "", current: "こんにちは"), "こんにちは")
+        XCTAssertEqual(TranscriptionManager.joinedDisplay(committed: "こんにちは", current: ""), "こんにちは")
+        XCTAssertEqual(TranscriptionManager.joinedDisplay(committed: "こんにちは", current: "世界"), "こんにちは世界")
+    }
+
     func testAudioSourceRawValuesAreJapanese() {
         XCTAssertEqual(AudioSource.microphone.rawValue, "マイク")
         XCTAssertEqual(AudioSource.systemAudio.rawValue, "システム音声（Zoom等）")
@@ -69,5 +170,46 @@ final class TranscriptionManagerTests: XCTestCase {
 
     func testAudioSourceAllCasesCoversBothVariants() {
         XCTAssertEqual(AudioSource.allCases, [.microphone, .systemAudio])
+    }
+}
+
+@MainActor
+private final class GatedSystemAudioCapture: SystemAudioCapturing {
+    var errorMessage: String?
+    var isCapturing = false
+    var audioBufferHandler: (@Sendable (AVAudioPCMBuffer) -> Void)?
+    var onStreamStopped: ((Error) -> Void)?
+    private var startGate: CheckedContinuation<Void, Never>?
+    private var cancelled = false
+
+    func startCapturing() async {
+        cancelled = false
+        await withCheckedContinuation { continuation in
+            startGate = continuation
+        }
+        if !cancelled {
+            isCapturing = true
+        }
+    }
+
+    func stopCapturing() async {
+        cancelled = true
+        isCapturing = false
+        startGate?.resume()
+        startGate = nil
+    }
+}
+
+@MainActor
+private final class FailingSystemAudioCapture: SystemAudioCapturing {
+    var errorMessage: String? = "画面収録の権限がありません"
+    var isCapturing = false
+    var audioBufferHandler: (@Sendable (AVAudioPCMBuffer) -> Void)?
+    var onStreamStopped: ((Error) -> Void)?
+
+    func startCapturing() async {}
+
+    func stopCapturing() async {
+        isCapturing = false
     }
 }

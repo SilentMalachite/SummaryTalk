@@ -52,6 +52,7 @@ struct IPtalkPanel: View {
                 }
                 .buttonStyle(.borderedProminent)
                 .tint(iptalkManager.isConnected ? .red : .blue)
+                .disabled(iptalkManager.isConnecting)
             }
 
             HStack {
@@ -64,6 +65,12 @@ struct IPtalkPanel: View {
 
             Toggle("認識結果を自動送信", isOn: $autoSend)
                 .toggleStyle(.switch)
+
+            if autoSend || iptalkManager.isConnected {
+                Text("送信内容は暗号化されず、同一LANへブロードキャストされます。")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
 
             if !iptalkManager.members.isEmpty {
                 VStack(alignment: .leading, spacing: 4) {

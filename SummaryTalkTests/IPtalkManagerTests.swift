@@ -17,7 +17,7 @@ final class IPtalkManagerTests: XCTestCase {
 
     func testStopListeningClearsConnectedAndMembers() async {
         let manager = IPtalkManager()
-        manager.channel = 1
+        manager.channel = 2
         manager.handleName = "TestStop"
 
         await manager.startListening()
@@ -29,34 +29,46 @@ final class IPtalkManagerTests: XCTestCase {
         XCTAssertTrue(manager.members.isEmpty, "stopListening should clear discovered members")
     }
 
-    /// Two IPtalkManagers on the same channel coexist instead of conflicting because
-    /// `NWParameters.udp.allowLocalEndpointReuse = true` is set on every listener (so the
-    /// app can re-bind ports after a crash/restart without waiting on the OS). As a side
-    /// effect, the spec §6 "ポート XXXX が使用中です" rollback path is unreachable in
-    /// Phase 1 — verified by this test. If a future change tightens the binding (e.g.
-    /// drops the reuse flag), this test should be replaced with the port-conflict
-    /// assertions the spec originally described.
-    func testSameChannelManagersCoexistDueToPortReuse() async {
+    /// Listener init can succeed with `allowLocalEndpointReuse`, but `.ready` still
+    /// fails for some ports (notably member-broadcast 6722) when another process
+    /// already holds the channel. Waiting for `.ready` therefore surfaces the spec §6
+    /// rollback that used to be unreachable at `NWListener` construction.
+    func testSameChannelSecondManagerRollsBackOnPortConflict() async {
         let first = IPtalkManager()
-        first.channel = 1
+        first.channel = 3
         first.handleName = "Holder"
         await first.startListening()
         defer { first.stopListening() }
         XCTAssertTrue(first.isConnected)
 
         let second = IPtalkManager()
-        second.channel = 1
+        second.channel = 3
         second.handleName = "Coexister"
         await second.startListening()
         defer { second.stopListening() }
 
-        XCTAssertTrue(second.isConnected, "with allowLocalEndpointReuse, the second listener binds successfully")
-        XCTAssertNil(second.errorMessage, "no error surfaces because the bind didn't actually fail")
+        XCTAssertFalse(second.isConnected, "a port-in-use failure during ready must not leave isConnected true")
+        XCTAssertNotNil(second.errorMessage)
+        XCTAssertTrue(first.isConnected, "the first manager must stay connected after the second rolls back")
+    }
+
+    func testConcurrentStartListeningDoesNotOverwriteStartup() async {
+        let manager = IPtalkManager()
+        manager.channel = 4
+        manager.handleName = "Concurrent"
+
+        async let first = manager.startListening()
+        async let second = manager.startListening()
+        _ = await (first, second)
+        defer { manager.stopListening() }
+
+        XCTAssertTrue(manager.isConnected, "exactly one in-flight start should complete")
+        XCTAssertNil(manager.errorMessage)
     }
 
     func testStartListeningTwiceIsNoOp() async {
         let manager = IPtalkManager()
-        manager.channel = 1
+        manager.channel = 5
         await manager.startListening()
         defer { manager.stopListening() }
         XCTAssertTrue(manager.isConnected)
@@ -72,9 +84,37 @@ final class IPtalkManagerTests: XCTestCase {
         XCTAssertEqual(manager.channel, 1, "default channel is 1")
         XCTAssertEqual(manager.handleName, "")
         XCTAssertFalse(manager.isConnected)
+        XCTAssertFalse(manager.isConnecting)
         XCTAssertTrue(manager.members.isEmpty)
         XCTAssertTrue(manager.receivedLines.isEmpty)
         XCTAssertEqual(manager.receivedText, "")
+        XCTAssertNil(manager.errorMessage)
+    }
+
+    func testStaleStartupTimeoutDoesNotSetError() async {
+        let manager = IPtalkManager()
+        manager.channel = 6
+        await manager.startListening()
+        defer { manager.stopListening() }
+
+        XCTAssertTrue(manager.isConnected)
+        manager.applyStartupTimeout(generation: 0)
+        XCTAssertTrue(manager.isConnected)
+        XCTAssertNil(manager.errorMessage)
+    }
+
+    func testReconnectIgnoresPreviousTimeoutTask() async throws {
+        let manager = IPtalkManager()
+        manager.channel = 7
+        manager.startupTimeoutNanoseconds = 200_000_000
+        await manager.startListening()
+        manager.stopListening()
+
+        await manager.startListening()
+        defer { manager.stopListening() }
+
+        try await Task.sleep(nanoseconds: 350_000_000)
+        XCTAssertTrue(manager.isConnected)
         XCTAssertNil(manager.errorMessage)
     }
 
@@ -101,7 +141,7 @@ final class IPtalkManagerTests: XCTestCase {
 
     func testStartListeningClearsExistingErrorMessage() async {
         let manager = IPtalkManager()
-        manager.channel = 1
+        manager.channel = 8
         manager.errorMessage = "前回の残骸"
         await manager.startListening()
         defer { manager.stopListening() }
