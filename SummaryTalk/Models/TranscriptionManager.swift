@@ -26,11 +26,13 @@ final class RecognitionRequestBox: @unchecked Sendable {
         lock.unlock()
     }
 
+    /// Appends under the lock. Reading the request and then releasing the lock let
+    /// the main actor swap in a replacement and `endAudio()` the old one in between,
+    /// so the buffer landed on a closed request and was lost at the re-arm boundary.
     func append(_ buffer: AVAudioPCMBuffer) {
         lock.lock()
-        let current = request
-        lock.unlock()
-        current?.append(buffer)
+        defer { lock.unlock() }
+        request?.append(buffer)
     }
 }
 
@@ -226,6 +228,9 @@ final class TranscriptionManager {
     func handleRecognitionUpdate(text: String, isFinal: Bool) {
         if isFinal {
             partialUpdateTask?.cancel()
+            // The final result supersedes any staged partial. Leaving it behind lets
+            // the stop-time flush revert the punctuation the final just added.
+            pendingTranscription = ""
             let display = Self.joinedDisplay(committed: committedText, current: text)
             if transcribedText != display {
                 transcribedText = display

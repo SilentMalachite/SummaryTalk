@@ -42,11 +42,22 @@ final class IPtalkManager {
     }
 
     private var listeners: [IPtalkPortRole: NWListener] = [:]
-    /// Strong owner for every live `NWConnection`. Network.framework does not retain
+    private struct InboundConnection {
+        let connection: NWConnection
+        var lastActivity: Date
+    }
+
+    /// Strong owners for every live `NWConnection`. Network.framework does not retain
     /// connections on our behalf — an untracked one can deallocate (and force-cancel)
     /// before it ever reaches `.ready`, silently dropping the datagram.
-    private var activeConnections: [ObjectIdentifier: NWConnection] = [:]
+    private var inboundConnections: [ObjectIdentifier: InboundConnection] = [:]
+    private var outboundConnections: [ObjectIdentifier: NWConnection] = [:]
     private static let maxReceivedLines = 2000
+    /// A UDP flow never reports its own end, and a peer that sends every datagram from
+    /// a fresh source port — which this app does — mints one listener connection per
+    /// line. Keeping the receive armed therefore has to come with reaping.
+    static let maxInboundConnections = 64
+    static let inboundIdleTimeout: TimeInterval = 60
     private let networkQueue = DispatchQueue(label: "com.summarytalk.iptalk", qos: .userInitiated)
     private var pendingReadyRoles: Set<IPtalkPortRole> = []
     private var startupContinuation: CheckedContinuation<Void, Error>?
@@ -180,8 +191,10 @@ final class IPtalkManager {
         }
         listeners.values.forEach { $0.cancel() }
         listeners.removeAll()
-        activeConnections.values.forEach { $0.cancel() }
-        activeConnections.removeAll()
+        inboundConnections.values.forEach { $0.connection.cancel() }
+        inboundConnections.removeAll()
+        outboundConnections.values.forEach { $0.cancel() }
+        outboundConnections.removeAll()
         pendingReadyRoles.removeAll()
         isConnected = false
         members.removeAll()
@@ -196,14 +209,14 @@ final class IPtalkManager {
             connection.cancel()
             return
         }
-        track(connection)
+        trackInbound(connection)
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let connection else { return }
             switch state {
             case .ready:
                 Task { @MainActor in self?.receive(on: connection, role: role) }
             case .failed, .cancelled:
-                Task { @MainActor in self?.release(connection) }
+                Task { @MainActor in self?.releaseInbound(connection) }
             default:
                 break
             }
@@ -215,15 +228,16 @@ final class IPtalkManager {
     /// loses the lines that arrive while the listener is minting a replacement
     /// connection for the same peer — IPtalk sends a steady stream of them.
     private func receive(on connection: NWConnection, role: IPtalkPortRole) {
-        guard activeConnections[ObjectIdentifier(connection)] != nil else { return }
+        guard inboundConnections[ObjectIdentifier(connection)] != nil else { return }
         connection.receiveMessage { [weak self] content, _, _, error in
             Task { @MainActor in
                 guard let self else { return }
                 if let content, !content.isEmpty {
+                    self.touchInbound(connection)
                     self.process(data: content, role: role, sender: self.endpointHost(connection))
                 }
                 if error != nil {
-                    self.release(connection)
+                    self.releaseInbound(connection)
                 } else {
                     self.receive(on: connection, role: role)
                 }
@@ -231,12 +245,64 @@ final class IPtalkManager {
         }
     }
 
-    private func track(_ connection: NWConnection) {
-        activeConnections[ObjectIdentifier(connection)] = connection
+    /// Test seam: how many listener-side flows are currently retained.
+    var trackedInboundConnectionCount: Int { inboundConnections.count }
+
+    private func trackInbound(_ connection: NWConnection) {
+        reapInboundConnections()
+        inboundConnections[ObjectIdentifier(connection)] = InboundConnection(
+            connection: connection, lastActivity: Date()
+        )
     }
 
-    private func release(_ connection: NWConnection) {
-        activeConnections.removeValue(forKey: ObjectIdentifier(connection))
+    private func touchInbound(_ connection: NWConnection) {
+        inboundConnections[ObjectIdentifier(connection)]?.lastActivity = Date()
+    }
+
+    private func releaseInbound(_ connection: NWConnection) {
+        inboundConnections.removeValue(forKey: ObjectIdentifier(connection))
+        connection.cancel()
+    }
+
+    /// Driven by new arrivals rather than a timer: no traffic means no growth, so
+    /// there is nothing to sweep when nothing is happening.
+    private func reapInboundConnections() {
+        let evicted = Self.inboundEvictionKeys(
+            lastActivity: inboundConnections.mapValues(\.lastActivity),
+            now: Date(),
+            idleTimeout: Self.inboundIdleTimeout,
+            limit: Self.maxInboundConnections
+        )
+        for key in evicted {
+            guard let tracked = inboundConnections.removeValue(forKey: key) else { continue }
+            tracked.connection.cancel()
+        }
+    }
+
+    /// Which flows to drop before admitting one more: everything idle past the
+    /// timeout, then the least recently used until there is room under `limit`.
+    /// Pure so the policy is testable without sockets.
+    static func inboundEvictionKeys<Key: Hashable>(
+        lastActivity: [Key: Date],
+        now: Date,
+        idleTimeout: TimeInterval,
+        limit: Int
+    ) -> Set<Key> {
+        let cutoff = now.addingTimeInterval(-idleTimeout)
+        var evicted = Set(lastActivity.filter { $0.value < cutoff }.keys)
+        let remaining = lastActivity.filter { !evicted.contains($0.key) }
+        guard remaining.count >= limit else { return evicted }
+        let excess = remaining.count - limit + 1
+        evicted.formUnion(remaining.sorted { $0.value < $1.value }.prefix(excess).map(\.key))
+        return evicted
+    }
+
+    private func trackOutbound(_ connection: NWConnection) {
+        outboundConnections[ObjectIdentifier(connection)] = connection
+    }
+
+    private func releaseOutbound(_ connection: NWConnection) {
+        outboundConnections.removeValue(forKey: ObjectIdentifier(connection))
         connection.cancel()
     }
 
@@ -338,7 +404,7 @@ final class IPtalkManager {
     }
 
     private func send(_ data: Data, on connection: NWConnection) {
-        track(connection)
+        trackOutbound(connection)
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let connection else { return }
             switch state {
@@ -348,16 +414,16 @@ final class IPtalkManager {
                         if let error {
                             self?.errorMessage = "送信失敗: \(error.localizedDescription)"
                         }
-                        self?.release(connection)
+                        self?.releaseOutbound(connection)
                     }
                 })
             case .failed(let error):
                 Task { @MainActor in
                     self?.errorMessage = "送信失敗: \(error.localizedDescription)"
-                    self?.release(connection)
+                    self?.releaseOutbound(connection)
                 }
             case .cancelled:
-                Task { @MainActor in self?.release(connection) }
+                Task { @MainActor in self?.releaseOutbound(connection) }
             default:
                 break
             }

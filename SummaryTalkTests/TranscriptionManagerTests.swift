@@ -179,6 +179,27 @@ final class TranscriptionManagerTests: XCTestCase {
         XCTAssertEqual(manager.recordingPhase, .idle)
     }
 
+    /// A final result supersedes the partial staged behind it. Flushing on stop
+    /// without clearing that staging area reverted the finalized line — losing the
+    /// punctuation and corrections the final had just applied.
+    func testStopDoesNotRevertFinalizedTextToStalePartial() async throws {
+        let manager = TranscriptionManager()
+
+        manager.handleRecognitionUpdate(text: "こんに", isFinal: false)
+        manager.handleRecognitionUpdate(text: "こんにちは", isFinal: false)
+        try XCTSkipIf(manager.transcribedText == "こんにちは",
+                      "throttle window elapsed between calls — no stale partial was staged")
+
+        manager.handleRecognitionUpdate(text: "こんにちは。", isFinal: true)
+        XCTAssertEqual(manager.transcribedText, "こんにちは。")
+
+        manager.isRecording = true
+        await manager.stopRecording()
+
+        XCTAssertEqual(manager.transcribedText, "こんにちは。",
+                       "stopping must not resurrect the partial the final superseded")
+    }
+
     func testJoinedDisplayConcatenatesCommittedAndCurrent() {
         XCTAssertEqual(TranscriptionManager.joinedDisplay(committed: "", current: "こんにちは"), "こんにちは")
         XCTAssertEqual(TranscriptionManager.joinedDisplay(committed: "こんにちは", current: ""), "こんにちは")

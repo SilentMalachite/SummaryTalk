@@ -150,6 +150,62 @@ final class IPtalkManagerTests: XCTestCase {
         XCTAssertTrue(manager.isConnected)
     }
 
+    /// A listener flow never ends on its own, and a peer that uses a fresh source
+    /// port per datagram — this app does — mints one per line. Re-arming the receive
+    /// without reaping grew the set until disconnect.
+    func testIdleInboundFlowsAreEvicted() {
+        let now = Date()
+        let evicted = IPtalkManager.inboundEvictionKeys(
+            lastActivity: [
+                "fresh": now.addingTimeInterval(-1),
+                "stale": now.addingTimeInterval(-120),
+                "borderline": now.addingTimeInterval(-59)
+            ],
+            now: now,
+            idleTimeout: 60,
+            limit: 64
+        )
+        XCTAssertEqual(evicted, ["stale"], "only flows past the idle timeout are dropped")
+    }
+
+    func testInboundEvictionMakesRoomAtTheLimit() {
+        let now = Date()
+        var lastActivity: [Int: Date] = [:]
+        for index in 0..<4 {
+            lastActivity[index] = now.addingTimeInterval(-Double(index))
+        }
+
+        let evicted = IPtalkManager.inboundEvictionKeys(
+            lastActivity: lastActivity, now: now, idleTimeout: 60, limit: 4
+        )
+
+        // At the limit one slot has to open up, and it is the least recently used.
+        XCTAssertEqual(evicted, [3])
+    }
+
+    func testInboundEvictionKeepsEveryoneUnderTheLimit() {
+        let now = Date()
+        let evicted = IPtalkManager.inboundEvictionKeys(
+            lastActivity: [1: now, 2: now.addingTimeInterval(-5)],
+            now: now,
+            idleTimeout: 60,
+            limit: 64
+        )
+        XCTAssertTrue(evicted.isEmpty, "there is room — nothing is dropped")
+    }
+
+    func testNoInboundConnectionsAreRetainedBeforeTraffic() async {
+        let manager = IPtalkManager()
+        manager.channel = 9
+        await manager.startListening()
+        defer { manager.stopListening() }
+
+        XCTAssertEqual(manager.trackedInboundConnectionCount, 0)
+        manager.stopListening()
+        XCTAssertEqual(manager.trackedInboundConnectionCount, 0,
+                       "stopListening drops every retained flow")
+    }
+
     func testClearReceivedTextWhenEmptyIsSafe() {
         let manager = IPtalkManager()
         manager.clearReceivedText()
