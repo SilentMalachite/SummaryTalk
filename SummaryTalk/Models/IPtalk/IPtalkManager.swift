@@ -42,6 +42,11 @@ final class IPtalkManager {
     }
 
     private var listeners: [IPtalkPortRole: NWListener] = [:]
+    /// Strong owner for every live `NWConnection`. Network.framework does not retain
+    /// connections on our behalf — an untracked one can deallocate (and force-cancel)
+    /// before it ever reaches `.ready`, silently dropping the datagram.
+    private var activeConnections: [ObjectIdentifier: NWConnection] = [:]
+    private static let maxReceivedLines = 2000
     private let networkQueue = DispatchQueue(label: "com.summarytalk.iptalk", qos: .userInitiated)
     private var pendingReadyRoles: Set<IPtalkPortRole> = []
     private var startupContinuation: CheckedContinuation<Void, Error>?
@@ -175,6 +180,8 @@ final class IPtalkManager {
         }
         listeners.values.forEach { $0.cancel() }
         listeners.removeAll()
+        activeConnections.values.forEach { $0.cancel() }
+        activeConnections.removeAll()
         pendingReadyRoles.removeAll()
         isConnected = false
         members.removeAll()
@@ -183,25 +190,54 @@ final class IPtalkManager {
     // MARK: - Receive
 
     private func handleIncoming(_ connection: NWConnection, role: IPtalkPortRole) {
-        connection.stateUpdateHandler = { [weak self] state in
-            if case .ready = state {
+        // A listener can hand us a connection after tearDown has already run; tracking
+        // it then would keep it alive with nothing left to cancel it.
+        guard !listeners.isEmpty else {
+            connection.cancel()
+            return
+        }
+        track(connection)
+        connection.stateUpdateHandler = { [weak self, weak connection] state in
+            guard let connection else { return }
+            switch state {
+            case .ready:
                 Task { @MainActor in self?.receive(on: connection, role: role) }
+            case .failed, .cancelled:
+                Task { @MainActor in self?.release(connection) }
+            default:
+                break
             }
         }
         connection.start(queue: networkQueue)
     }
 
+    /// Re-arms after every datagram. Cancelling the flow after a single message
+    /// loses the lines that arrive while the listener is minting a replacement
+    /// connection for the same peer — IPtalk sends a steady stream of them.
     private func receive(on connection: NWConnection, role: IPtalkPortRole) {
-        connection.receiveMessage { [weak self] content, _, _, _ in
-            guard let self else { return }
+        guard activeConnections[ObjectIdentifier(connection)] != nil else { return }
+        connection.receiveMessage { [weak self] content, _, _, error in
             Task { @MainActor in
-                if let content {
-                    let sender = self.endpointHost(connection)
-                    self.process(data: content, role: role, sender: sender)
+                guard let self else { return }
+                if let content, !content.isEmpty {
+                    self.process(data: content, role: role, sender: self.endpointHost(connection))
                 }
-                connection.cancel()
+                if error != nil {
+                    self.release(connection)
+                } else {
+                    self.receive(on: connection, role: role)
+                }
             }
         }
+    }
+
+    private func track(_ connection: NWConnection) {
+        activeConnections[ObjectIdentifier(connection)] = connection
+    }
+
+    private func release(_ connection: NWConnection) {
+        activeConnections.removeValue(forKey: ObjectIdentifier(connection))
+        connection.cancel()
     }
 
     private func endpointHost(_ connection: NWConnection) -> String {
@@ -236,6 +272,9 @@ final class IPtalkManager {
 
     private func appendLine(_ kind: IPtalkLineKind, sender: String, text: String) {
         receivedLines.append(IPtalkReceivedLine(id: UUID(), kind: kind, sender: sender, text: text, receivedAt: Date()))
+        if receivedLines.count > Self.maxReceivedLines {
+            receivedLines.removeFirst(receivedLines.count - Self.maxReceivedLines)
+        }
     }
 
     /// Adds a member if new. If `name` is non-nil and non-empty, updates the display
@@ -299,19 +338,26 @@ final class IPtalkManager {
     }
 
     private func send(_ data: Data, on connection: NWConnection) {
+        track(connection)
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let connection else { return }
             switch state {
             case .ready:
-                connection.send(content: data, completion: .contentProcessed { [weak self, weak connection] error in
-                    if let error {
-                        Task { @MainActor in self?.errorMessage = "送信失敗: \(error.localizedDescription)" }
+                connection.send(content: data, completion: .contentProcessed { [weak self] error in
+                    Task { @MainActor in
+                        if let error {
+                            self?.errorMessage = "送信失敗: \(error.localizedDescription)"
+                        }
+                        self?.release(connection)
                     }
-                    connection?.cancel()
                 })
             case .failed(let error):
-                Task { @MainActor in self?.errorMessage = "送信失敗: \(error.localizedDescription)" }
-                connection.cancel()
+                Task { @MainActor in
+                    self?.errorMessage = "送信失敗: \(error.localizedDescription)"
+                    self?.release(connection)
+                }
+            case .cancelled:
+                Task { @MainActor in self?.release(connection) }
             default:
                 break
             }
