@@ -28,7 +28,7 @@ SummaryTalk は、macOS 向けのリアルタイム文字起こし（要約筆�
 ## セットアップ
 
 1. **プロジェクトを開く**: `SummaryTalk.xcodeproj` を Xcode で開きます（SwiftPM の `Package.swift` はありません）。
-2. **署名設定**: 「Signing & Capabilities」で開発チームを選択します。
+2. **署名設定**: 「Signing & Capabilities」で開発チームを選択します。**`SummaryTalk` と `SummaryTalkTests` の両方に同じチームを設定してください** — テストバンドルの署名がホストアプリと一致しないと `dlopen` に失敗し、テストが 1 件も実行できません。
 3. **ビルド & 実行**: スキーム `SummaryTalk`、Destination `My Mac` でビルド・実行します。
 
 ### コマンドラインからのビルド / テスト
@@ -49,11 +49,12 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 1. **権限の許可**: 初回起動時に「マイク」「音声認識」、システム音声利用時は「画面収録」の権限が求められます。画面収録は音声抽出のためにのみ使用します。
    - 画面収録権限は **初回付与後にアプリの再起動が必要** です（macOS の仕様）。
+   - IPtalk 接続時は「ローカルネットワーク」の許可も求められます（`NSLocalNetworkUsageDescription`）。
 2. **入力ソースの選択**:
    - **マイク**: 「マイク」を選択して「録音開始」。
    - **システム音声（Zoom 等）**: 「システム音声」を選択し、アプリピッカーから対象アプリ（または「ディスプレイ全体」）を選んで「録音開始」。対象アプリは事前に起動しておく必要があります。
 3. **IPtalk 連携**:
-   - 「IPtalk パネルを表示」をオン。
+   - ツールバーの「IPtalk」ボタンをクリックしてパネルを開く。
    - チャンネル（1–9）とハンドル名を設定し、「接続」をクリック。
    - 「認識結果を自動送信」をオンにすると、確定した認識行が自動で表示部にブロードキャストされます。
 
@@ -67,18 +68,21 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 ## テスト
 
-`SummaryTalkTests/` に以下のテストがあります。
+`SummaryTalkTests/` に 6 スイート・計 67 件のテストがあります。
 
-- `IPtalkProtocolTests` — ポート算術、Shift-JIS 往復、メンバ探索ペイロード等の純粋関数テスト。
-- `IPtalkManagerTests` — リスナ ライフサイクル、ポート再利用挙動、送信失敗時のエラー通知。
-- `SystemAudioManagerTests` — `RunningApplicationLike` の差し替えによる選択肢生成と権限フローのテスト。
-- `TranscriptionManagerTests` — 音声ソース切替、部分結果スロットル、確定行のコールバック発火。
+- `IPtalkProtocolTests`（18 件）— ポート算術、Shift-JIS 往復、メンバ探索ペイロード等の純粋関数テスト。
+- `IPtalkManagerTests`（16 件）— リスナ ライフサイクル、同一チャンネル競合時のロールバック、並行接続の排他、受信フロー回収ポリシー。
+- `TranscriptionManagerTests`（18 件）— 音声ソース切替、部分結果スロットル、確定行のコールバック発火、停止時のテキスト取りこぼし防止。
+- `SystemAudioAppChoiceTests`（6 件）— `RunningApplicationLike` を差し替えたピッカー選択肢の生成。
+- `SystemAudioManagerTests`（6 件）— 権限フローとエラー種別（permission / listing / capture）の切り分け。
+- `AudioStreamOutputTests`（3 件）— 合成 `CMSampleBuffer` を用いたステレオ→モノラル変換、バッファ寿命、連続リサンプリングの検証。
 
 ## 既知の制限（Phase 2 で対応予定）
 
 - メンバ探索 (6722/6718) ペイロードはハンドル名 Shift-JIS バイト列での実装。本物の IPtalk とのパケットキャプチャ次第で形式の再調整が必要。
 - 6711 表示部パケットのヘッダ有無、Undo / 修正パケットの正確な書式は同様に検証待ち。
-- `NWParameters.udp.allowLocalEndpointReuse = true` のため、同一マシン上の 2 インスタンスは同一チャンネルで共存します（ポート競合エラーは発火しません）。
+- `NWParameters.udp.allowLocalEndpointReuse = true` により `NWListener` の生成自体は成功しますが、同一マシンで同一チャンネルを取り合うと一部ポート（特にメンバ探索 6722）が `.ready` に到達しないため、2 つ目のインスタンスは接続をロールバックしてエラーを表示します。
+- 受信フローの保持上限は 64、アイドル回収は 60 秒の固定値です。多数のピアが同時に送信する環境では最も古いフローから切断されます（そのピアの次のデータグラムで再確立されるため通信は継続します）。
 - ブロードキャスト先は `255.255.255.255` 固定。サブネット限定ブロードキャストが必要な環境では届かない可能性があります。
 - 詳細は [`CHANGELOG.md`](CHANGELOG.md) および `docs/superpowers/specs/` の設計書を参照。
 
@@ -128,7 +132,7 @@ It transcribes both microphone input and system audio (e.g. Zoom), and provides 
 ## Setup
 
 1. **Open the project**: open `SummaryTalk.xcodeproj` in Xcode (no SwiftPM `Package.swift`).
-2. **Signing**: pick your development team under "Signing & Capabilities".
+2. **Signing**: pick your development team under "Signing & Capabilities". **Set the same team on both `SummaryTalk` and `SummaryTalkTests`** — if the test bundle's signature does not match the host app, `dlopen` refuses it and no test can run.
 3. **Build & Run**: scheme `SummaryTalk`, destination `My Mac`.
 
 ### Command-line build / test
@@ -143,12 +147,12 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 ## Usage
 
-1. **Grant permissions**: on first launch the app asks for Microphone, Speech Recognition, and (for system audio) Screen Recording. Screen Recording is only used to extract audio — and **the app must be relaunched after the first grant** for it to take effect.
+1. **Grant permissions**: on first launch the app asks for Microphone, Speech Recognition, and (for system audio) Screen Recording. Screen Recording is only used to extract audio — and **the app must be relaunched after the first grant** for it to take effect. Connecting to IPtalk additionally prompts for Local Network access (`NSLocalNetworkUsageDescription`).
 2. **Pick an input source**:
    - **Microphone**: select "マイク (Microphone)", click "録音開始 (Start)".
    - **System Audio**: select "システム音声 (System Audio)", choose a target app (or "ディスプレイ全体" / entire display) in the picker, then click "録音開始". The target app must be running beforehand.
 3. **IPtalk integration**:
-   - Toggle "IPtalk パネルを表示 (Show IPtalk Panel)".
+   - Click the "IPtalk" button in the control bar to open the panel.
    - Pick channel (1–9), set your handle name, and click "接続 (Connect)".
    - Enable "認識結果を自動送信 (Auto-send recognized lines)" to broadcast finalized lines automatically.
 
@@ -162,18 +166,21 @@ Three independent `@MainActor @Observable` managers are wired together in `Conte
 
 ## Tests
 
-Under `SummaryTalkTests/`:
+Six suites, 67 tests in total, under `SummaryTalkTests/`:
 
-- `IPtalkProtocolTests` — pure-function tests for port math, Shift-JIS round-trip, and member-discovery payloads.
-- `IPtalkManagerTests` — listener lifecycle, port-reuse behavior, send-failure error propagation.
-- `SystemAudioManagerTests` — picker entry construction (via `RunningApplicationLike`) and permission flow.
-- `TranscriptionManagerTests` — audio-source switching, partial-result throttling, finalized-line callback.
+- `IPtalkProtocolTests` (18) — pure-function tests for port math, Shift-JIS round-trip, and member-discovery payloads.
+- `IPtalkManagerTests` (16) — listener lifecycle, same-channel conflict rollback, concurrent-connect exclusion, inbound-flow reaping policy.
+- `TranscriptionManagerTests` (18) — audio-source switching, partial-result throttling, finalized-line callback, and no text loss on stop.
+- `SystemAudioAppChoiceTests` (6) — picker entry construction via `RunningApplicationLike`.
+- `SystemAudioManagerTests` (6) — permission flow and error-kind classification (permission / listing / capture).
+- `AudioStreamOutputTests` (3) — stereo-to-mono conversion, buffer lifetime, and sustained resampling, driven by a synthetic `CMSampleBuffer`.
 
 ## Known Limitations (planned for Phase 2)
 
 - Member-discovery (6722/6718) payload is currently a Shift-JIS handle-name byte sequence; needs adjustment once we have real-IPtalk packet captures.
 - The display-port (6711) header presence and the exact byte format of Undo / correction packets are likewise pending verification.
-- Because `NWParameters.udp.allowLocalEndpointReuse = true`, two SummaryTalk instances on the same host can coexist on the same channel (no port-conflict errors).
+- `NWParameters.udp.allowLocalEndpointReuse = true` lets `NWListener` construction succeed, but when two instances contend for the same channel some ports (notably member-discovery 6722) never reach `.ready`, so the second instance rolls the connection back and surfaces an error.
+- Inbound flows are capped at 64 with a 60 s idle reap. With many peers sending at once the least recently used flow is dropped first; it is re-established on that peer's next datagram.
 - Broadcast destination is hard-coded to `255.255.255.255`; subnet-directed broadcasts (`192.168.x.255`) are not used.
 - See [`CHANGELOG.md`](CHANGELOG.md) and the design docs under `docs/superpowers/specs/` for the full list.
 
