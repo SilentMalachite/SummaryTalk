@@ -270,10 +270,15 @@ final class TranscriptionManager {
     }
 
     private func rearmRecognitionIfNeeded() {
-        guard isRecording, recordingPhase == .running, recognitionRequest != nil else { return }
+        guard isRecording, recordingPhase == .running, let previousRequest = recognitionRequest else { return }
         lastFinalizedText = ""
-        recognitionTask = nil
+        let previousTask = recognitionTask
+        // Swap the replacement in first so the audio tap never has a dead request to
+        // append to, then retire the old one — releasing the references is not enough,
+        // an un-ended request keeps its task alive until the audio limit trips.
         beginRecognitionRequest()
+        previousRequest.endAudio()
+        previousTask?.cancel()
     }
 
     private func emitFinalizedDelta(currentText: String) {
@@ -329,13 +334,22 @@ final class TranscriptionManager {
         }
         captureStopObserver = nil
 
+        // A partial can be sitting in the throttle window when the user hits stop;
+        // dropping it silently loses up to `partialUpdateInterval` of transcript.
         partialUpdateTask?.cancel()
-        pendingTranscription = ""
+        flushPendingTranscription()
 
         abandonRecognitionRequest()
 
         recordingPhase = .idle
         isRecording = false
+    }
+
+    private func flushPendingTranscription() {
+        if !pendingTranscription.isEmpty, transcribedText != pendingTranscription {
+            transcribedText = pendingTranscription
+        }
+        pendingTranscription = ""
     }
 
     private func abandonRecognitionRequest() {

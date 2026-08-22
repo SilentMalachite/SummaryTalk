@@ -157,6 +157,28 @@ final class TranscriptionManagerTests: XCTestCase {
         XCTAssertEqual(manager.transcribedText, "世界")
     }
 
+    /// Partials inside the throttle window are only staged in `pendingTranscription`.
+    /// Teardown used to clear that staging area, silently dropping the tail of the
+    /// transcript whenever the user stopped mid-utterance.
+    func testStopFlushesThrottledPartialText() async throws {
+        let manager = TranscriptionManager()
+
+        manager.handleRecognitionUpdate(text: "こんに", isFinal: false)
+        XCTAssertEqual(manager.transcribedText, "こんに")
+
+        manager.handleRecognitionUpdate(text: "こんにちは", isFinal: false)
+        try XCTSkipIf(manager.transcribedText == "こんにちは",
+                      "throttle window elapsed between calls — nothing was staged to flush")
+        XCTAssertEqual(manager.transcribedText, "こんに", "a throttled partial is not applied immediately")
+
+        manager.isRecording = true
+        await manager.stopRecording()
+
+        XCTAssertEqual(manager.transcribedText, "こんにちは", "stopping must flush the staged partial")
+        XCTAssertFalse(manager.isRecording)
+        XCTAssertEqual(manager.recordingPhase, .idle)
+    }
+
     func testJoinedDisplayConcatenatesCommittedAndCurrent() {
         XCTAssertEqual(TranscriptionManager.joinedDisplay(committed: "", current: "こんにちは"), "こんにちは")
         XCTAssertEqual(TranscriptionManager.joinedDisplay(committed: "こんにちは", current: ""), "こんにちは")
