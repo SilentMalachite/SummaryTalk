@@ -13,7 +13,10 @@
 - メンバ探索の往復処理。6722 で他クライアントからの問い合わせを受けると 6718 でユニキャスト応答し、自分自身も `startListening()` 完了時に 1 度ブロードキャストする。
 - システム音声キャプチャ対象のアプリを選択する `SystemAudioAppPicker` UI（Zoom / Teams / Meet 等を一覧から選択。「ディスプレイ全体」も選択可能）。
 - `SystemAudioManager.lastErrorKind`（`SystemAudioErrorKind`）— UI が permission / listing / capture 失敗を区別して対処できるようにする。
-- `IPtalkProtocolTests`（14 件）と `IPtalkManagerTests`（4 件）。ポート算術、Shift-JIS 往復、メンバ探索ペイロード、リスナ ライフサイクル、ポート再利用挙動を網羅。
+- ユニットテスト計 67 件 — `IPtalkProtocolTests`（18）/ `IPtalkManagerTests`（16）/ `TranscriptionManagerTests`（18）/ `SystemAudioAppChoiceTests`（6）/ `SystemAudioManagerTests`（6）/ `AudioStreamOutputTests`（3）。ポート算術、Shift-JIS 往復、メンバ探索ペイロード、リスナ ライフサイクル、ポート競合時のロールバック、認識セッションのライフサイクル、オーディオ変換を網羅。
+- `AudioStreamOutputTests` — 合成 `CMSampleBuffer` を用いて、ステレオ→モノラル変換時のフレーム数、パススルー時のバッファ寿命、連続リサンプリングの安定性を検証。テストから駆動できるよう `AudioStreamOutput.process(sampleBuffer:)` を切り出した（`SCStream` はユニットテストで生成できないため）。
+- `Info.plist` に `NSLocalNetworkUsageDescription` を追加し、同一ネットワーク上の端末と通信する旨を明示。
+- IPtalk パネルに、送信内容が暗号化されず LAN へブロードキャストされる旨の注意書きを表示。
 
 ### Changed
 
@@ -22,6 +25,10 @@
 - システム音声ソース切り替え時にアプリ一覧を失わないように、`SystemAudioManager` が選択状態を保持し続けるよう変更。
 - `SystemAudioManager.startCapturing()` 成功時に過去のエラー状態を確実にクリア。
 - UDP 送信失敗時に `errorMessage` を「送信失敗: {error}」として通知（`isConnected` は維持）。
+- 音声認識を確定結果ごとに再武装し、開始 / 停止を直列化。システム音声の起動中に停止しても録音が復活しないようにした。
+- `IPtalkManager.startListening()` が全リスナの `.ready` を待ってから接続完了とするよう変更。並行呼び出しは 1 つだけが成立し、古い接続世代のタイムアウトは無視される。
+- テストターゲットの署名設定（`DEVELOPMENT_TEAM` / `CODE_SIGN_IDENTITY`）をアプリ本体に合わせた。
+- `SystemAudioManager` の `SCStreamDelegate` 実装を専用の `StreamStopObserver` へ分離（`SCStream` が `Sendable` でないため世代トークンを受け渡す）。不要になった `NSObject` 継承を削除。
 
 ### Fixed
 
@@ -30,6 +37,18 @@
 - 画面収録権限を初回付与した直後に「再起動が必要」というヒントをエラーメッセージに含めるよう改善。
 - `IPtalkManager` 内の `NWConnection` 送信クロージャでの強参照保持（自己解決はしていたものの retain cycle を明示的に解消）。
 - `clearReceivedText()` の意味漏れ — 表示部（`.display`）以外の履歴まで消していた問題を修正し、`receivedText` 計算プロパティが見せる範囲のみクリアするよう挙動を一致させた。
+- **システム音声が 16 kHz 以外で届くとアプリごとクラッシュする問題。** `AVAudioConverter.convert(to:from:)` はサンプルレート変換に対応しておらず、`outputBuffer.frameCapacity >= inputBuffer.frameLength` のアサートでプロセスを停止する（Swift の `catch` では捕捉できない）。プル型の `convert(to:error:withInputFrom:)` に置き換え、入力フォーマットが変化した場合はコンバータを作り直す。
+- **ステレオのシステム音声が二重の長さ・片チャンネル未初期化のまま音声認識に渡っていた問題。** ASBD を無視して float32 / 非インターリーブと決め打ちし、フレーム数を「全体バイト数 ÷ フレームあたりバイト数」で求めてブロックバッファ全体を channel 0 へコピーしていた。`withAudioBufferList` と ASBD 由来のフォーマットで読み出すよう変更。
+- パススルー経路が no-copy バッファをそのまま渡していた問題。`CMSampleBuffer` の寿命が尽きると解放済みメモリを指すため、コピーを取るようにした。
+- 意図的なキャプチャ停止が「ストリームエラー」として報告され、再開直後のセッションを巻き添えで停止させうる問題。`isStoppingIntentionally` フラグは `didStopWithError` の `Task { @MainActor }` ホップより前に `defer` で戻るため機能していなかった。世代トークン方式に統一。
+- IPtalk の送信データグラムが送出されないことがある問題。`NWConnection` を保持する参照がなく `.ready` 到達前に解放（＝強制キャンセル）されうるため、送信完了まで保持する（上記「送信クロージャの retain cycle 解消」を、所有権をマネージャ側に移す形で見直し）。
+- IPtalk の受信で、同一ピアが同じ送信元ポートから連続送信した行を取りこぼす問題。1 データグラムごとに接続をキャンセルしていたのを受信ループの再武装に変更。あわせて、送信元ポートが毎回変わるピア（本アプリ自身が該当）で接続が際限なく増えないよう、アイドル超過と LRU による回収を追加（上限 64 / 60 秒）。
+- 録音停止時に、スロットル待ち（0.25 秒）の認識結果が破棄されて文字起こしの末尾が欠ける問題。
+- 確定結果の直後に停止すると、確定済みの行が 1 つ前の partial に巻き戻り、句点や修正が失われる問題。
+- 認識セッション再武装時に旧 `SFSpeechAudioBufferRecognitionRequest` を `endAudio()` せず放置し、旧タスクが録音時間上限まで残っていた問題。
+- `RecognitionRequestBox.append` がロック解放後に append していたため、再武装の境界でオーディオバッファが終了済みリクエストに落ちて失われる競合。
+- `receivedLines` が無制限に増加する問題（上限 2000 行）。`receivedText` は SwiftUI の描画ごとに全履歴を連結するため、実測上の負荷にもなっていた。
+- テストバンドルが無署名だったため hardened runtime のホストアプリに `dlopen` できず、`xcodebuild ... test` が 1 件も実行できなかった問題（`different Team IDs`）。
 
 ### Removed
 
@@ -49,6 +68,7 @@
 
 - `memberDiscoveryRequest` / `memberDiscoveryReply` のペイロードは公開仕様の範囲で実装（ハンドル名の Shift-JIS バイト列）。本物 IPtalk とのパケットキャプチャ次第で形式の調整が必要。
 - 6711 表示部パケットのヘッダ有無、Undo / 修正パケットの正確な書式は同様に検証待ち。
-- `NWParameters.udp.allowLocalEndpointReuse = true` のため、同一マシン上の 2 つの SummaryTalk は同チャンネルで共存する（spec §6 のポート競合エラーは事実上発火しない）。意図的な挙動として `testSameChannelManagersCoexistDueToPortReuse` でピン留め。
+- `NWParameters.udp.allowLocalEndpointReuse = true` により `NWListener` の生成自体は成功するが、同一マシンで同チャンネルを取り合うと一部ポート（特にメンバ探索 6722）が `.ready` に到達しないため、2 つ目の SummaryTalk は spec §6 のロールバックに入る。`testSameChannelSecondManagerRollsBackOnPortConflict` でピン留め。
+- 受信フローの保持上限は 64、アイドル回収は 60 秒の固定値。多数のピアが同時に送信する環境では最も古いフローから切断される（次のデータグラムで再確立されるため通信自体は継続する）。
 - `endpointHost(_:)` が dual-stack 環境で IPv4-mapped IPv6 形式（`::ffff:192.168.x.x`）を返すケースがあり、同一ピアが別表現でメンバー一覧に二重登録されうる。
 - ブロードキャスト先は `255.255.255.255` 固定。サブネット限定ブロードキャスト（`192.168.x.255`）が必要な環境では届かない可能性。
