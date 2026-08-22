@@ -21,7 +21,7 @@ protocol SystemAudioCapturing: AnyObject {
 
 @MainActor
 @Observable
-final class SystemAudioManager: NSObject, SystemAudioCapturing {
+final class SystemAudioManager: SystemAudioCapturing {
     var isCapturing: Bool = false
     var isRefreshing: Bool = false
     var errorMessage: String?
@@ -31,7 +31,8 @@ final class SystemAudioManager: NSObject, SystemAudioCapturing {
 
     private var stream: SCStream?
     private var streamOutput: AudioStreamOutput?
-    private var isStoppingIntentionally = false
+    private var streamDelegate: StreamStopObserver?
+    private var streamGeneration: UInt64 = 0
     private let targetFormat: AVAudioFormat = AVAudioFormat(
         commonFormat: .pcmFormatFloat32, sampleRate: 16_000, channels: 1, interleaved: false
     )!
@@ -48,7 +49,6 @@ final class SystemAudioManager: NSObject, SystemAudioCapturing {
     ) {
         self.permissionCheck = permissionCheck
         self.requestPermission = requestPermission
-        super.init()
     }
 
     func refreshAvailableApps() async {
@@ -126,7 +126,14 @@ final class SystemAudioManager: NSObject, SystemAudioCapturing {
             config.height = 2
             config.minimumFrameInterval = CMTime(value: 1, timescale: 1)
 
-            let newStream = SCStream(filter: filter, configuration: config, delegate: self)
+            streamGeneration += 1
+            let generation = streamGeneration
+            let delegate = StreamStopObserver(generation: generation) { [weak self] stoppedGeneration, error in
+                Task { @MainActor in
+                    self?.handleStreamStopped(generation: stoppedGeneration, error: error)
+                }
+            }
+            let newStream = SCStream(filter: filter, configuration: config, delegate: delegate)
             let downstream = audioBufferHandler
             let output = AudioStreamOutput(
                 targetFormat: targetFormat,
@@ -144,6 +151,7 @@ final class SystemAudioManager: NSObject, SystemAudioCapturing {
             try newStream.addStreamOutput(output, type: .audio, sampleHandlerQueue: audioProcessingQueue)
             stream = newStream
             streamOutput = output
+            streamDelegate = delegate
             try await newStream.startCapture()
 
             isCapturing = true
@@ -158,11 +166,10 @@ final class SystemAudioManager: NSObject, SystemAudioCapturing {
     }
 
     func stopCapturing() async {
-        isStoppingIntentionally = true
-        defer { isStoppingIntentionally = false }
-
+        streamGeneration += 1
         let existing = stream
         streamOutput = nil
+        streamDelegate = nil
         stream = nil
         isCapturing = false
 
@@ -179,11 +186,10 @@ final class SystemAudioManager: NSObject, SystemAudioCapturing {
     }
 
     private func abandonUnstartedCapture() async {
-        isStoppingIntentionally = true
-        defer { isStoppingIntentionally = false }
-
+        streamGeneration += 1
         let existing = stream
         streamOutput = nil
+        streamDelegate = nil
         stream = nil
         isCapturing = false
         if let existing {
@@ -191,28 +197,43 @@ final class SystemAudioManager: NSObject, SystemAudioCapturing {
         }
     }
 
-    private func handleStreamStopped(error: Error) {
+    /// `didStopWithError` reaches us through a `Task` hop, so it can land after the
+    /// intentional stop has already returned — or even after a *new* stream started.
+    /// The generation token is what separates a genuine failure from a late echo;
+    /// a bare flag would already have been reset by the time this runs.
+    private func handleStreamStopped(generation: UInt64, error: Error) {
+        guard generation == streamGeneration, stream != nil else { return }
         streamOutput = nil
+        streamDelegate = nil
         stream = nil
         isCapturing = false
-        guard !isStoppingIntentionally else { return }
         lastErrorKind = .captureFailed
         errorMessage = "ストリームエラー: \(error.localizedDescription)"
         onStreamStopped?(error)
     }
 }
 
-extension SystemAudioManager: SCStreamDelegate {
-    nonisolated func stream(_ stream: SCStream, didStopWithError error: Error) {
-        Task { @MainActor in
-            self.handleStreamStopped(error: error)
-        }
+/// `SCStream` holds its delegate weakly and is not `Sendable`, so the stop callback
+/// carries a generation token instead of the stream itself.
+private final class StreamStopObserver: NSObject, SCStreamDelegate {
+    private let generation: UInt64
+    private let onStopped: @Sendable (UInt64, Error) -> Void
+
+    init(generation: UInt64, onStopped: @escaping @Sendable (UInt64, Error) -> Void) {
+        self.generation = generation
+        self.onStopped = onStopped
+        super.init()
+    }
+
+    func stream(_ stream: SCStream, didStopWithError error: Error) {
+        onStopped(generation, error)
     }
 }
 
 final class AudioStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
     private let targetFormat: AVAudioFormat
     private var converter: AVAudioConverter?
+    private var pendingInput: AVAudioPCMBuffer?
     private let handler: @Sendable (AVAudioPCMBuffer) -> Void
     private let onError: (@Sendable (String) -> Void)?
 
@@ -229,60 +250,91 @@ final class AudioStreamOutput: NSObject, SCStreamOutput, @unchecked Sendable {
 
     func stream(_ stream: SCStream, didOutputSampleBuffer sampleBuffer: CMSampleBuffer, of type: SCStreamOutputType) {
         guard type == .audio else { return }
-        guard let formatDesc = sampleBuffer.formatDescription,
-              let asbd = CMAudioFormatDescriptionGetStreamBasicDescription(formatDesc) else { return }
+        process(sampleBuffer: sampleBuffer)
+    }
 
-        let format = AVAudioFormat(
-            commonFormat: .pcmFormatFloat32,
-            sampleRate: asbd.pointee.mSampleRate,
-            channels: AVAudioChannelCount(asbd.pointee.mChannelsPerFrame),
-            interleaved: false
-        )
+    /// Split out of the delegate callback so tests can drive it with a synthetic
+    /// `CMSampleBuffer` — an `SCStream` cannot be constructed in a unit test.
+    func process(sampleBuffer: CMSampleBuffer) {
+        guard sampleBuffer.isValid, sampleBuffer.numSamples > 0 else { return }
+        guard var asbd = sampleBuffer.formatDescription?.audioStreamBasicDescription,
+              let sourceFormat = AVAudioFormat(streamDescription: &asbd) else { return }
 
-        guard let format = format else { return }
+        // The source layout has to come from the ASBD: assuming non-interleaved and
+        // copying the whole block buffer into channel 0 mangles anything but mono.
+        let converted = try? sampleBuffer.withAudioBufferList { bufferList, _ -> AVAudioPCMBuffer? in
+            guard let source = AVAudioPCMBuffer(pcmFormat: sourceFormat, bufferListNoCopy: bufferList.unsafePointer) else {
+                return nil
+            }
+            return convertBuffer(source)
+        }
 
-        guard let blockBuffer = CMSampleBufferGetDataBuffer(sampleBuffer) else { return }
-        let totalLength = CMBlockBufferGetDataLength(blockBuffer)
-        guard totalLength > 0 else { return }
-
-        let bytesPerFrame = Int(format.streamDescription.pointee.mBytesPerFrame)
-        let frameCapacity = AVAudioFrameCount(totalLength / bytesPerFrame)
-        guard frameCapacity > 0 else { return }
-        guard let pcmBuffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCapacity) else { return }
-
-        guard let channelData = pcmBuffer.floatChannelData else { return }
-
-        let copyResult = CMBlockBufferCopyDataBytes(blockBuffer, atOffset: 0, dataLength: totalLength, destination: channelData[0])
-        guard copyResult == kCMBlockBufferNoErr else { return }
-
-        pcmBuffer.frameLength = frameCapacity
-
-        guard let converted = convertBuffer(pcmBuffer) else { return }
+        guard let converted else { return }
         handler(converted)
     }
 
     private func convertBuffer(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
         if buffer.format.sampleRate == targetFormat.sampleRate,
            buffer.format.channelCount == targetFormat.channelCount,
-           buffer.format.commonFormat == targetFormat.commonFormat {
-            return buffer
+           buffer.format.commonFormat == targetFormat.commonFormat,
+           buffer.format.isInterleaved == targetFormat.isInterleaved {
+            return copied(buffer)
         }
-        if converter == nil {
+        if converter == nil || converter?.inputFormat != buffer.format {
             converter = AVAudioConverter(from: buffer.format, to: targetFormat)
         }
-        guard let converter else { return nil }
+        guard let converter else {
+            onError?("オーディオコンバータの作成に失敗しました")
+            return nil
+        }
+
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate
-        let convertedCapacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 1
+        let convertedCapacity = AVAudioFrameCount((Double(buffer.frameLength) * ratio).rounded(.up)) + 1
         guard let outputBuffer = AVAudioPCMBuffer(pcmFormat: targetFormat, frameCapacity: convertedCapacity) else {
             onError?("オーディオバッファ変換に失敗しました")
             return nil
         }
-        do {
-            try converter.convert(to: outputBuffer, from: buffer)
-            return outputBuffer
-        } catch {
-            onError?("オーディオ変換エラー: \(error.localizedDescription)")
+
+        // `convert(to:from:)` asserts `outputBuffer.frameCapacity >= inputBuffer.frameLength`
+        // and traps the process — it cannot resample. Only the pull-based API can.
+        pendingInput = buffer
+        var conversionError: NSError?
+        let status = converter.convert(to: outputBuffer, error: &conversionError) { [self] _, outStatus in
+            guard let next = pendingInput else {
+                outStatus.pointee = .noDataNow
+                return nil
+            }
+            pendingInput = nil
+            outStatus.pointee = .haveData
+            return next
+        }
+        pendingInput = nil
+
+        switch status {
+        case .haveData, .inputRanDry:
+            return outputBuffer.frameLength > 0 ? outputBuffer : nil
+        case .endOfStream:
+            return nil
+        case .error:
+            onError?("オーディオ変換エラー: \(conversionError?.localizedDescription ?? "不明なエラー")")
+            return nil
+        @unknown default:
             return nil
         }
+    }
+
+    /// The incoming buffer wraps the sample buffer's memory and is invalid the moment
+    /// `withAudioBufferList` returns, so the pass-through path must still own its bytes.
+    private func copied(_ buffer: AVAudioPCMBuffer) -> AVAudioPCMBuffer? {
+        let frames = buffer.frameLength
+        guard frames > 0,
+              let copy = AVAudioPCMBuffer(pcmFormat: buffer.format, frameCapacity: frames),
+              let source = buffer.floatChannelData,
+              let destination = copy.floatChannelData else { return nil }
+        for channel in 0..<Int(buffer.format.channelCount) {
+            destination[channel].update(from: source[channel], count: Int(frames))
+        }
+        copy.frameLength = frames
+        return copy
     }
 }
