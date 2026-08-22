@@ -1,7 +1,8 @@
 # System Audio App Picker Implementation Plan
 
-> **ステータス: 完了済み — 履歴として保存。再実行しないこと。** 下記のタスクはすべて実装済みで、チェックボックスが
-> 未チェックなのはプランの書き方によるもので、残作業ではない。掲載しているコードは 2026-05-16 時点のもので、
+> **ステータス: 完了済み — 履歴として保存。再実行しないこと。** 実装タスクはすべて出荷済みでチェック済み。
+> 未チェックで残っているのは Task 7 の手動 UX 確認のみで、これは実施記録が残っていないため。
+> 掲載しているコードは 2026-05-16 時点のもので、
 > 一部は現在では**使ってはいけない**実装になっている。特に:
 >
 > - Task 2 の `audioConverter.convert(to:from:)` 呼び出し — この API はサンプルレート
@@ -67,7 +68,7 @@ xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
 - Create: `SummaryTalkTests/SystemAudioManagerTests.swift`
 - Modify: `SummaryTalk.xcodeproj/project.pbxproj` (新規 2 ファイル登録)
 
-- [ ] **Step 1.1: 新規テストファイルを作成 (失敗するテストを先に書く)**
+- [x] **Step 1.1: 新規テストファイルを作成 (失敗するテストを先に書く)**
 
 `SummaryTalkTests/SystemAudioManagerTests.swift` を以下で新規作成。
 
@@ -123,7 +124,7 @@ final class SystemAudioAppChoiceTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 1.2: pbxproj にテストファイルを登録**
+- [x] **Step 1.2: pbxproj にテストファイルを登録**
 
 `SummaryTalk.xcodeproj/project.pbxproj` に以下の編集を加える。既存 ID は最大 `A1000010` / `A200000C` なので、新 ID は `A100001A` / `A200000D` を使う (連番だと将来の差し込みで衝突しやすいので末尾は 1A から)。
 
@@ -151,7 +152,7 @@ final class SystemAudioAppChoiceTests: XCTestCase {
 				A100001A /* SystemAudioManagerTests.swift in Sources */,
 ```
 
-- [ ] **Step 1.3: テストをビルドして失敗を確認**
+- [x] **Step 1.3: テストをビルドして失敗を確認**
 
 ```bash
 xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
@@ -161,7 +162,7 @@ xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
 
 期待: コンパイルエラー (`cannot find 'RunningApplicationLike' in scope` / `cannot find 'makeChoices' in scope` / `'AppChoice'` 未定義)。
 
-- [ ] **Step 1.4: `SystemAudioAppChoice.swift` を新規作成 (最小実装でテスト通過まで一気に)**
+- [x] **Step 1.4: `SystemAudioAppChoice.swift` を新規作成 (最小実装でテスト通過まで一気に)**
 
 `SummaryTalk/Models/SystemAudioAppChoice.swift` を以下で新規作成。
 
@@ -212,7 +213,7 @@ func makeChoices(from apps: [RunningApplicationLike]) -> [AppChoiceLabel] {
 }
 ```
 
-- [ ] **Step 1.5: pbxproj に `SystemAudioAppChoice.swift` を登録**
+- [x] **Step 1.5: pbxproj に `SystemAudioAppChoice.swift` を登録**
 
 ID は `A100001B` / `A200000E` を使う。
 
@@ -240,7 +241,7 @@ ID は `A100001B` / `A200000E` を使う。
 				A100001B /* SystemAudioAppChoice.swift in Sources */,
 ```
 
-- [ ] **Step 1.6: テストが全件通過することを確認**
+- [x] **Step 1.6: テストが全件通過することを確認**
 
 ```bash
 xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
@@ -250,7 +251,7 @@ xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
 
 期待: 5 件すべて PASS (` Test Suite 'SystemAudioAppChoiceTests' passed`)。
 
-- [ ] **Step 1.7: コミット**
+- [x] **Step 1.7: コミット**
 
 ```bash
 git add SummaryTalk/Models/SystemAudioAppChoice.swift \
@@ -267,7 +268,7 @@ git commit -m "feat: add AppChoice generation logic for system audio picker"
 - Modify: `SummaryTalk/Models/SystemAudioManager.swift`
 - Modify: `SummaryTalkTests/SystemAudioManagerTests.swift` (テスト追加)
 
-- [ ] **Step 2.1: テストを追加 (権限拒否で `.permissionDenied` になることを検証)**
+- [x] **Step 2.1: テストを追加 (権限拒否で `.permissionDenied` になることを検証)**
 
 `SummaryTalkTests/SystemAudioManagerTests.swift` の末尾 (最後の `}` の前) に以下のテストクラスを追加。
 
@@ -292,7 +293,7 @@ final class SystemAudioManagerTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2.2: テストをビルドして失敗を確認**
+- [x] **Step 2.2: テストをビルドして失敗を確認**
 
 ```bash
 xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
@@ -302,7 +303,7 @@ xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
 
 期待: コンパイルエラー (`extra arguments at positions #1, #2 in call` / `cannot find 'permissionDenied' in scope` / `value of type 'SystemAudioManager' has no member 'lastErrorKind'` 等)。
 
-- [ ] **Step 2.3: `SystemAudioManager.swift` を全面更新**
+- [x] **Step 2.3: `SystemAudioManager.swift` を全面更新**
 
 `SummaryTalk/Models/SystemAudioManager.swift` を以下で **置き換え** (元のロジックは保持しつつ、`init`/`refreshAvailableApps`/`startCapturing` を改修)。
 
@@ -540,7 +541,7 @@ final class AudioStreamOutput: NSObject, SCStreamOutput {
 }
 ```
 
-- [ ] **Step 2.4: テストが通ることを確認**
+- [x] **Step 2.4: テストが通ることを確認**
 
 ```bash
 xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
@@ -550,7 +551,7 @@ xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
 
 期待: `SystemAudioManagerTests` の 1 件、`SystemAudioAppChoiceTests` の 5 件、全 6 件 PASS。
 
-- [ ] **Step 2.5: コミット**
+- [x] **Step 2.5: コミット**
 
 ```bash
 git add SummaryTalk/Models/SystemAudioManager.swift \
@@ -567,7 +568,7 @@ git commit -m "feat: add error kind and injectable permission check to SystemAud
 
 このタスクは Views/ContentView の参照を一時的に壊すため、Task 4-6 完了までビルドが通らない。**コミットは Task 6 完了後にまとめて行う** (各タスクで `git add` だけしておく)。
 
-- [ ] **Step 3.1: `TranscriptionManager` から `systemAudioManager` プロパティを削除し、API を引数渡しに変更**
+- [x] **Step 3.1: `TranscriptionManager` から `systemAudioManager` プロパティを削除し、API を引数渡しに変更**
 
 `SummaryTalk/Models/TranscriptionManager.swift` の以下を編集:
 
@@ -654,7 +655,7 @@ git commit -m "feat: add error kind and injectable permission check to SystemAud
 
 に置き換える。
 
-- [ ] **Step 3.2: ビルドが (Views 経路の参照欠落で) 失敗することを確認**
+- [x] **Step 3.2: ビルドが (Views 経路の参照欠落で) 失敗することを確認**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk \
@@ -663,7 +664,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk \
 
 期待: `ControlPanel.swift` 等で `startRecording`/`stopRecording` の呼び出しが新シグネチャと噛み合わずビルド失敗。Task 5 まで進める前提でこのまま続行。
 
-- [ ] **Step 3.3: `git add` のみ (commit はまだ)**
+- [x] **Step 3.3: `git add` のみ (commit はまだ)**
 
 ```bash
 git add SummaryTalk/Models/TranscriptionManager.swift
@@ -677,7 +678,7 @@ git add SummaryTalk/Models/TranscriptionManager.swift
 - Create: `SummaryTalk/Views/SystemAudioAppPicker.swift`
 - Modify: `SummaryTalk.xcodeproj/project.pbxproj`
 
-- [ ] **Step 4.1: `SystemAudioAppPicker.swift` を新規作成**
+- [x] **Step 4.1: `SystemAudioAppPicker.swift` を新規作成**
 
 `SummaryTalk/Views/SystemAudioAppPicker.swift` を以下で新規作成。
 
@@ -772,7 +773,7 @@ struct SystemAudioAppPicker: View {
 }
 ```
 
-- [ ] **Step 4.2: pbxproj に `SystemAudioAppPicker.swift` を登録**
+- [x] **Step 4.2: pbxproj に `SystemAudioAppPicker.swift` を登録**
 
 ID は `A100001C` / `A200000F` を使う。
 
@@ -800,7 +801,7 @@ ID は `A100001C` / `A200000F` を使う。
 				A100001C /* SystemAudioAppPicker.swift in Sources */,
 ```
 
-- [ ] **Step 4.3: `git add` のみ**
+- [x] **Step 4.3: `git add` のみ**
 
 ```bash
 git add SummaryTalk/Views/SystemAudioAppPicker.swift \
@@ -814,7 +815,7 @@ git add SummaryTalk/Views/SystemAudioAppPicker.swift \
 **Files:**
 - Modify: `SummaryTalk/Views/ControlPanel.swift`
 
-- [ ] **Step 5.1: `ControlPanel` を更新**
+- [x] **Step 5.1: `ControlPanel` を更新**
 
 `SummaryTalk/Views/ControlPanel.swift` を以下で **置き換え**。
 
@@ -916,7 +917,7 @@ struct ControlPanel: View {
 }
 ```
 
-- [ ] **Step 5.2: `git add` のみ**
+- [x] **Step 5.2: `git add` のみ**
 
 ```bash
 git add SummaryTalk/Views/ControlPanel.swift
@@ -929,7 +930,7 @@ git add SummaryTalk/Views/ControlPanel.swift
 **Files:**
 - Modify: `SummaryTalk/ContentView.swift`
 
-- [ ] **Step 6.1: `ContentView` を更新**
+- [x] **Step 6.1: `ContentView` を更新**
 
 `SummaryTalk/ContentView.swift` を以下で **置き換え**。
 
@@ -974,7 +975,7 @@ struct ContentView: View {
 
 (注: 旧コードの `onChange` の空ボディはデッドコードだったので削除した)
 
-- [ ] **Step 6.2: アプリ全体のビルド検証**
+- [x] **Step 6.2: アプリ全体のビルド検証**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk \
@@ -983,7 +984,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk \
 
 期待: `** BUILD SUCCEEDED **`。
 
-- [ ] **Step 6.3: テスト全件再実行**
+- [x] **Step 6.3: テスト全件再実行**
 
 ```bash
 xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
@@ -992,7 +993,7 @@ xcodebuild test -project SummaryTalk.xcodeproj -scheme SummaryTalk \
 
 期待: `Test Suite 'All tests' passed` (既存の `IPtalkManagerTests` 4 件 + 新規 6 件 = 10 件)。
 
-- [ ] **Step 6.4: Task 3〜6 の変更をまとめてコミット**
+- [x] **Step 6.4: Task 3〜6 の変更をまとめてコミット**
 
 ```bash
 git add SummaryTalk/ContentView.swift
@@ -1006,6 +1007,9 @@ git commit -m "feat: wire system audio app picker into ControlPanel and ContentV
 ## Task 7: 手動 UX 確認 (アプリ起動・実機テスト)
 
 ユニットテストでは UI と権限フローを検証できないため、Xcode から実機ビルドして以下のシナリオを通す。
+
+> **これらは人手による確認手順で、実施記録が残っていないため意図的に未チェックのままにしている。**
+> 対象の実装自体は出荷済みだが、実機での UX 確認結果が記録されていない。
 
 - [ ] **Step 7.1: Xcode から `SummaryTalk` スキームで Run**
 

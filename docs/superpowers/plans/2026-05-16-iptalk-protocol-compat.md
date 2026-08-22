@@ -1,7 +1,8 @@
 # IPtalk Protocol Compatibility Implementation Plan
 
-> **STATUS: COMPLETED — historical record. Do not execute.** Every task below shipped; the unticked
-> checkboxes are an artefact of how the plan was written, not remaining work. The code listings are what
+> **STATUS: COMPLETED — historical record. Do not execute.** Every implementation task below shipped and
+> is ticked. The only unticked steps are Task 10's manual verification, which has no record of being run.
+> The code listings are what
 > was written on 2026-05-16 and several have since been replaced — notably the `NWConnection` send path,
 > which was later given an owner because Network.framework does not retain connections, and the
 > single-datagram receive, which now re-arms and reaps idle flows. Treat this file as a record of what
@@ -46,7 +47,7 @@
 - Delete: `SummaryTalk/Models/IPtalkManager.swift`, `SummaryTalkTests/IPtalkManagerTests.swift`
 - Modify: `SummaryTalk.xcodeproj/project.pbxproj`
 
-- [ ] **Step 1: Create stub Swift files so the project still compiles**
+- [x] **Step 1: Create stub Swift files so the project still compiles**
 
 ```bash
 mkdir -p SummaryTalk/Models/IPtalk
@@ -83,14 +84,14 @@ final class IPtalkProtocolTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Delete the old IPtalkManager.swift and IPtalkManagerTests.swift from the filesystem**
+- [x] **Step 2: Delete the old IPtalkManager.swift and IPtalkManagerTests.swift from the filesystem**
 
 ```bash
 rm SummaryTalk/Models/IPtalkManager.swift
 rm SummaryTalkTests/IPtalkManagerTests.swift
 ```
 
-- [ ] **Step 3: Patch project.pbxproj — replace the IPtalkManager.swift / IPtalkManagerTests.swift file references with the new paths and add IPtalkProtocol.swift**
+- [x] **Step 3: Patch project.pbxproj — replace the IPtalkManager.swift / IPtalkManagerTests.swift file references with the new paths and add IPtalkProtocol.swift**
 
 The existing `IPtalkManager.swift` file ref uses `path = IPtalkManager.swift` under the `Models` group. We're moving it inside a new `IPtalk` group at `Models/IPtalk/`. Simplest approach: edit the existing entries in-place (keep their UUIDs to minimize diff) and add new entries for `IPtalkProtocol.swift`.
 
@@ -164,7 +165,7 @@ with:
 				A1000010 /* IPtalkProtocolTests.swift in Sources */,
 ```
 
-- [ ] **Step 4: Build to verify the project file is still valid**
+- [x] **Step 4: Build to verify the project file is still valid**
 
 Run:
 ```bash
@@ -173,7 +174,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Deb
 
 Expected: `** BUILD SUCCEEDED **`. The stub `IPtalkManager` has no members the rest of the app uses, so `ContentView` / `IPtalkPanel` will fail to compile. That's expected at this point — we'll fix them as we go. **If you see compile errors only in `ContentView.swift` / `IPtalkPanel.swift` referencing methods like `sendText` / `startListening` / `port` / `connectedPartners` / `receivedText`, that is the expected failure mode; do not try to fix those yet.** Build success at this step means only "the project file parses." If you see errors mentioning `Models/IPtalk/IPtalkProtocol.swift` or `IPtalkProtocolTests.swift` being unfound, the pbxproj patch is wrong; re-check Step 3.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add SummaryTalk/Models/IPtalk SummaryTalkTests/IPtalkProtocolTests.swift SummaryTalk.xcodeproj/project.pbxproj
@@ -189,7 +190,7 @@ git commit -m "refactor: restructure IPtalk module into IPtalk/ subdirectory"
 - Modify: `SummaryTalkTests/IPtalkProtocolTests.swift`
 - Modify: `SummaryTalk/Models/IPtalk/IPtalkProtocol.swift`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Replace the body of `SummaryTalkTests/IPtalkProtocolTests.swift` with:
 
@@ -225,7 +226,7 @@ final class IPtalkProtocolTests: XCTestCase {
 }
 ```
 
-- [ ] **Step 2: Run the tests to confirm they fail (compile error)**
+- [x] **Step 2: Run the tests to confirm they fail (compile error)**
 
 Run:
 ```bash
@@ -234,7 +235,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 Expected: compilation fails because `IPtalkProtocol.port` and `IPtalkPortRole` don't exist.
 
-- [ ] **Step 3: Implement just enough to pass**
+- [x] **Step 3: Implement just enough to pass**
 
 Replace the body of `SummaryTalk/Models/IPtalk/IPtalkProtocol.swift` with:
 
@@ -267,7 +268,7 @@ enum IPtalkProtocol {
 }
 ```
 
-- [ ] **Step 4: Run the tests to confirm they pass**
+- [x] **Step 4: Run the tests to confirm they pass**
 
 Run:
 ```bash
@@ -276,7 +277,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 Expected: `Test Suite 'IPtalkProtocolTests' passed` with 4 tests passing.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add SummaryTalk/Models/IPtalk/IPtalkProtocol.swift SummaryTalkTests/IPtalkProtocolTests.swift
@@ -291,7 +292,7 @@ git commit -m "feat: add IPtalk port mapping with channel arithmetic"
 - Modify: `SummaryTalkTests/IPtalkProtocolTests.swift`
 - Modify: `SummaryTalk/Models/IPtalk/IPtalkProtocol.swift`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append these test methods inside the `IPtalkProtocolTests` class:
 
@@ -340,7 +341,7 @@ Append these test methods inside the `IPtalkProtocolTests` class:
     }
 ```
 
-- [ ] **Step 2: Run the tests to confirm they fail**
+- [x] **Step 2: Run the tests to confirm they fail**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'platform=macOS' -only-testing:SummaryTalkTests/IPtalkProtocolTests test 2>&1 | tail -15
@@ -348,7 +349,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 Expected: compile error (no `encode` / `decode`).
 
-- [ ] **Step 3: Implement encode/decode**
+- [x] **Step 3: Implement encode/decode**
 
 Append to `SummaryTalk/Models/IPtalk/IPtalkProtocol.swift` (after the existing `port(role:channel:)` static method, still inside `enum IPtalkProtocol`):
 
@@ -365,7 +366,7 @@ Append to `SummaryTalk/Models/IPtalk/IPtalkProtocol.swift` (after the existing `
     }
 ```
 
-- [ ] **Step 4: Run the tests to confirm they pass**
+- [x] **Step 4: Run the tests to confirm they pass**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'platform=macOS' -only-testing:SummaryTalkTests/IPtalkProtocolTests test 2>&1 | tail -15
@@ -373,7 +374,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 Expected: 11 tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add SummaryTalk/Models/IPtalk/IPtalkProtocol.swift SummaryTalkTests/IPtalkProtocolTests.swift
@@ -390,7 +391,7 @@ git commit -m "feat: add Shift-JIS encode/decode for IPtalk text frames"
 
 These are Phase 1 placeholder payloads (handle name as Shift-JIS); the exact wire format is unknown until users provide packet captures. The helpers exist as a seam so Phase 2 can swap the format without touching the manager.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append inside `IPtalkProtocolTests`:
 
@@ -413,7 +414,7 @@ Append inside `IPtalkProtocolTests`:
     }
 ```
 
-- [ ] **Step 2: Run to confirm failure**
+- [x] **Step 2: Run to confirm failure**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'platform=macOS' -only-testing:SummaryTalkTests/IPtalkProtocolTests test 2>&1 | tail -10
@@ -421,7 +422,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 Expected: compile error (no `memberDiscoveryRequest`/`Reply`).
 
-- [ ] **Step 3: Implement helpers**
+- [x] **Step 3: Implement helpers**
 
 Append inside `enum IPtalkProtocol`:
 
@@ -435,7 +436,7 @@ Append inside `enum IPtalkProtocol`:
     }
 ```
 
-- [ ] **Step 4: Run to confirm pass**
+- [x] **Step 4: Run to confirm pass**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'platform=macOS' -only-testing:SummaryTalkTests/IPtalkProtocolTests test 2>&1 | tail -10
@@ -443,7 +444,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 Expected: 14 tests pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add SummaryTalk/Models/IPtalk/IPtalkProtocol.swift SummaryTalkTests/IPtalkProtocolTests.swift
@@ -459,7 +460,7 @@ git commit -m "feat: add Phase 1 IPtalk member discovery payload helpers"
 
 These are simple Sendable value types; they don't need their own file.
 
-- [ ] **Step 1: Add the value types**
+- [x] **Step 1: Add the value types**
 
 Replace the body of `SummaryTalk/Models/IPtalk/IPtalkManager.swift` with:
 
@@ -495,7 +496,7 @@ final class IPtalkManager {
 }
 ```
 
-- [ ] **Step 2: Build to confirm it compiles**
+- [x] **Step 2: Build to confirm it compiles**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Debug build 2>&1 | tail -10
@@ -503,7 +504,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Deb
 
 Expected: errors only in `ContentView.swift` / `IPtalkPanel.swift` (still referencing the removed API). No errors in `IPtalkManager.swift` itself.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add SummaryTalk/Models/IPtalk/IPtalkManager.swift
@@ -519,7 +520,7 @@ git commit -m "feat: add IPtalk member and received-line value types"
 
 This is the biggest single task — it brings up the full multi-port listener stack. Tests are deferred to manual integration since `NWListener` is awkward to unit-test (binds real sockets). State changes (`isConnected`) are verified by the integration test step in Task 12.
 
-- [ ] **Step 1: Replace the class body with the full networking implementation**
+- [x] **Step 1: Replace the class body with the full networking implementation**
 
 Replace the existing `final class IPtalkManager` block (the one with empty `init()`) with:
 
@@ -728,7 +729,7 @@ final class IPtalkManager {
 }
 ```
 
-- [ ] **Step 2: Build and confirm `IPtalkManager.swift` itself compiles cleanly**
+- [x] **Step 2: Build and confirm `IPtalkManager.swift` itself compiles cleanly**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Debug build 2>&1 | grep -E "(error:|warning:)" | grep -v "ContentView\|IPtalkPanel" | head -20
@@ -736,7 +737,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Deb
 
 Expected: no errors from `IPtalkManager.swift` itself. The only errors should still be in `ContentView.swift` / `IPtalkPanel.swift` (next tasks). Swift 6 strict concurrency may flag the `NWListener` callbacks — confirm they all use `[weak self]` and dispatch to `@MainActor` via `Task { @MainActor in ... }`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add SummaryTalk/Models/IPtalk/IPtalkManager.swift
@@ -753,7 +754,7 @@ git commit -m "feat: implement multi-port UDP listeners and IPtalk send/receive"
 
 The callback fires only the *newly-finalized portion* (delta since the last finalization), since `result.bestTranscription.formattedString` is cumulative within a session.
 
-- [ ] **Step 1: Add the `onFinalizedLine` property**
+- [x] **Step 1: Add the `onFinalizedLine` property**
 
 In `SummaryTalk/Models/TranscriptionManager.swift`, locate the existing block of properties at the top of the class (after `var audioSource: AudioSource = .microphone`) and add:
 
@@ -762,7 +763,7 @@ In `SummaryTalk/Models/TranscriptionManager.swift`, locate the existing block of
     private var lastFinalizedText: String = ""
 ```
 
-- [ ] **Step 2: Emit deltas from `handleRecognitionUpdate(text:isFinal:)`**
+- [x] **Step 2: Emit deltas from `handleRecognitionUpdate(text:isFinal:)`**
 
 Locate the existing `handleRecognitionUpdate` method (around line 168). Replace its entire body with:
 
@@ -813,7 +814,7 @@ Locate the existing `handleRecognitionUpdate` method (around line 168). Replace 
     }
 ```
 
-- [ ] **Step 3: Reset `lastFinalizedText` on session boundaries**
+- [x] **Step 3: Reset `lastFinalizedText` on session boundaries**
 
 In `startMicrophoneRecording()` (around line 76), add this line right after `pendingTranscription = ""`:
 
@@ -834,7 +835,7 @@ In `clearText()` (around line 220), replace its body with:
     }
 ```
 
-- [ ] **Step 4: Build to confirm `TranscriptionManager.swift` compiles**
+- [x] **Step 4: Build to confirm `TranscriptionManager.swift` compiles**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Debug build 2>&1 | grep -E "error:" | grep "TranscriptionManager" | head -10
@@ -842,7 +843,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Deb
 
 Expected: no errors in `TranscriptionManager.swift`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add SummaryTalk/Models/TranscriptionManager.swift
@@ -856,7 +857,7 @@ git commit -m "feat: emit finalized recognition deltas via onFinalizedLine callb
 **Files:**
 - Modify: `SummaryTalk/Views/IPtalkPanel.swift`
 
-- [ ] **Step 1: Replace the entire file**
+- [x] **Step 1: Replace the entire file**
 
 Replace the full contents of `SummaryTalk/Views/IPtalkPanel.swift` with:
 
@@ -1020,7 +1021,7 @@ struct IPtalkPanel: View {
 }
 ```
 
-- [ ] **Step 2: Build to confirm IPtalkPanel compiles**
+- [x] **Step 2: Build to confirm IPtalkPanel compiles**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Debug build 2>&1 | grep "error:" | head -20
@@ -1028,7 +1029,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Deb
 
 Expected: only errors in `ContentView.swift` (next task). No errors in `IPtalkPanel.swift`.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add SummaryTalk/Views/IPtalkPanel.swift
@@ -1042,7 +1043,7 @@ git commit -m "feat: rewrite IPtalkPanel with channel picker, handle name, and a
 **Files:**
 - Modify: `SummaryTalk/ContentView.swift`
 
-- [ ] **Step 1: Replace the file**
+- [x] **Step 1: Replace the file**
 
 Replace the full contents of `SummaryTalk/ContentView.swift` with:
 
@@ -1092,7 +1093,7 @@ struct ContentView: View {
 }
 ```
 
-- [ ] **Step 2: Build the whole app**
+- [x] **Step 2: Build the whole app**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Debug build 2>&1 | tail -10
@@ -1100,7 +1101,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -configuration Deb
 
 Expected: `** BUILD SUCCEEDED **`.
 
-- [ ] **Step 3: Run the full test suite to confirm no regressions**
+- [x] **Step 3: Run the full test suite to confirm no regressions**
 
 ```bash
 xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'platform=macOS' test 2>&1 | tail -25
@@ -1108,7 +1109,7 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 Expected: all tests pass (`IPtalkProtocolTests` 14, `SystemAudioAppChoiceTests` 5, `SystemAudioManagerTests` 2). The old `IPtalkManagerTests` should be gone.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add SummaryTalk/ContentView.swift
@@ -1122,6 +1123,13 @@ git commit -m "feat: auto-send finalized recognition lines via IPtalk when enabl
 **Files:** none (manual verification)
 
 Run the app and confirm the IPtalk-compat path works end-to-end on the local machine (loopback first; cross-machine with a real IPtalk client is Phase 2).
+
+> **These steps are human verification and there is no record of them being run — they are left
+> unticked on purpose.** The implementation they cover shipped, but nobody logged the tcpdump / lsof
+> results, and cross-machine verification against a real IPtalk client is still the open Phase 2
+> trigger (see the spec §10, and the "Known limitations" in `README.md`). Note also that Step 6's
+> expected string is out of date: a same-channel conflict now surfaces as a listener `.ready` failure
+> ("ポート XXXX リスナエラー: …"), not the construction-time "ポート XXXX が使用中です" message.
 
 - [ ] **Step 1: Launch the app**
 
@@ -1169,7 +1177,7 @@ If any of the above fails, file a follow-up task before declaring Phase 1 done.
 **Files:**
 - Modify: `CLAUDE.md`
 
-- [ ] **Step 1: Update the stale test-command examples (lines 18 and 20)**
+- [x] **Step 1: Update the stale test-command examples (lines 18 and 20)**
 
 Replace this line:
 ```
@@ -1189,7 +1197,7 @@ with:
   -only-testing:SummaryTalkTests/IPtalkProtocolTests/testEncodeKanjiRoundTrip test
 ```
 
-- [ ] **Step 2: Replace the IPtalkManager architecture bullet (line 33)**
+- [x] **Step 2: Replace the IPtalkManager architecture bullet (line 33)**
 
 Replace the entire one-line bullet starting `- **\`IPtalkManager\`** (\`Models/IPtalkManager.swift\`)` with:
 
@@ -1197,7 +1205,7 @@ Replace the entire one-line bullet starting `- **\`IPtalkManager\`** (\`Models/I
 - **`IPtalkManager`** (`Models/IPtalk/IPtalkManager.swift` + `Models/IPtalk/IPtalkProtocol.swift`) — real IPtalk-compatible UDP client (栗田茂明氏作 IPtalk). Opens 6 `NWListener`s per channel (display 6711, monitor 6712, correction 6713, member-reply 6718, member-broadcast 6722, undo 6723; channel N adds 100×(N-1)). Text is plain Shift-JIS terminated by LF — no custom header. `IPtalkProtocol.swift` holds the pure functions (port arithmetic, encode/decode, member-discovery payloads) and is the place to iterate on wire format if real-IPtalk packet captures reveal the Phase 1 payload guesses are wrong. `IPtalkManager.swift` owns the listener stack and broadcasts to `255.255.255.255`. Finalized speech-recognition lines auto-publish via `TranscriptionManager.onFinalizedLine` when `iptalkAutoSend` (UserDefault) is true.
 ```
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add CLAUDE.md
