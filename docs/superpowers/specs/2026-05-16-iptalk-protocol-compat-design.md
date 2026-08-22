@@ -1,6 +1,7 @@
 # IPtalk プロトコル互換化 設計書
 
 - 日付: 2026-05-16
+- ステータス: **Phase 1 実装済み**。2026-08-23 に現行実装と食い違っていた記述を訂正（§6、§8、末尾の「実装後の追補」を参照）
 - 対象: `SummaryTalk/Models/IPtalkManager.swift` の全面書き換え
 - 目的: 本物のIPtalk（栗田茂明氏作のパソコン要約筆記ソフト）と相互通信できる実装に置き換える
 
@@ -206,7 +207,9 @@ LAN
 | 受信デコード失敗 | 当該行を破棄。errorMessageは出さない（騒音回避） |
 | ブロードキャストsend失敗 | `errorMessage` に「送信失敗: \(error)」、isConnectedは維持 |
 
-**Phase 1 note on port-in-use:** With `NWParameters.udp.allowLocalEndpointReuse = true` (set on every listener so the app can re-bind quickly across crashes/restarts), macOS allows multiple `NWListener`s to bind the same UDP port. The port-in-use rollback path in `startListening()`'s catch block is wired up correctly but is **unreachable in Phase 1** — the listener init does not throw. Two SummaryTalk instances on the same channel will coexist, both receiving every packet. The error message described in the table is dead code for now; it would activate if Phase 2 tightens the binding by dropping the reuse flag. Test `testSameChannelManagersCoexistDueToPortReuse` documents and pins this current behavior.
+**ポート競合について（2026-08-23 訂正）:** `NWParameters.udp.allowLocalEndpointReuse = true`（クラッシュ後などに素早く再バインドできるよう全 listener に設定）のため、`NWListener` の**生成自体は throw しない**。当初この設計書は「そのためロールバック経路は到達不能で、2 インスタンスは共存する」と記していたが、これは現在の挙動ではない。
+
+`startListening()` が全 listener の `.ready` を待つようになったことで、同一マシンで同一チャンネルを取り合うと一部ポート（特にメンバ探索 6722）が `.ready` に到達せず `.failed` になる。結果、上表のロールバックと `errorMessage` は**実際に発火する**。2 つ目のインスタンスは接続に失敗し、1 つ目は接続を維持する。テスト `testSameChannelSecondManagerRollsBackOnPortConflict` がこの挙動を固定している（旧 `testSameChannelManagersCoexistDueToPortReuse` は削除済み）。
 
 ## 7. テスト戦略
 
@@ -239,7 +242,7 @@ Phase 1 完成後、ユーザーが下記を実施:
 - 旧 `"TEXT"` 形式は完全廃止
 - 旧形式で他者と通信できていたユーザーはいない（誰も解読できない独自形式だったため）
 - SummaryTalk⇄SummaryTalk のユースケースは新形式（IPtalk互換）で引き続き動作
-- `Info.plist` / entitlements は既存の `network.client`/`network.server` で十分（変更不要）
+- entitlements は既存の `network.client` / `network.server` で十分（変更不要）。`Info.plist` には後日 `NSLocalNetworkUsageDescription` を追加した（接続時にローカルネットワーク許可のプロンプトが出るため）
 
 ## 9. スコープ外
 
@@ -253,3 +256,19 @@ Phase 1 完成後、ユーザーが下記を実施:
 ユーザーから以下のいずれかが提供された時点でPhase 2に移行:
 - 本物IPtalk と SummaryTalk 間のパケットキャプチャ（pcapファイル）
 - 「メンバー一覧に表示されない」など具体的な非互換症状の報告と再現手順
+
+---
+
+## 実装後の追補（2026-08-23）
+
+Phase 1 の実装後に判明した、この設計書だけでは読み取れない実装上の制約。
+
+**接続の所有権.** Network.framework は `NWConnection` を代理保持しない。自身の `stateUpdateHandler` からしか到達できない接続は `.ready` に達する前に解放され、強制キャンセルされてデータグラムが黙って失われる。そのため `IPtalkManager` が `inboundConnections` / `outboundConnections` で全ての生存接続を所有し、完了時に解放する。
+
+**受信フローの寿命.** listener が受け付けたフローは 1 データグラムごとにキャンセルするのではなく receive を再武装する（送信元ポートを固定するピアは 1 フローで多数の行を送るため）。ただし UDP フローは自然終了しないうえ、送信元ポートが毎回変わるピア（本アプリ自身が該当。送信のたびに `NWConnection` を作るため）は 1 行につき 1 フローを生む。よってアイドル 60 秒／上限 64 の回収が必須で、判定は純関数 `inboundEvictionKeys` に切り出してある。
+
+**受信履歴の上限.** `receivedLines` は 2000 行で打ち切る。`receivedText` は SwiftUI の描画ごとに全履歴を連結するため、無制限だと長時間運用で効いてくる。
+
+**API の追補.** §3 のスケッチには無いが、実装には `isConnecting`（接続中の二重実行防止・UI のボタン無効化に使用）と `startupTimeoutNanoseconds`（テストから短縮するための seam）がある。
+
+**世代トークン.** `startListening()` / `stopListening()` は `startupGeneration` を進め、`Task { @MainActor }` を経由して遅れて着弾したリスナ状態変化やタイムアウトを無視する。真偽値フラグでは `defer` が先に戻るため機能しない。

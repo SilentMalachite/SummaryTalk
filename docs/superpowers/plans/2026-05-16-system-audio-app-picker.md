@@ -1,5 +1,17 @@
 # System Audio App Picker Implementation Plan
 
+> **ステータス: 完了済み — 履歴として保存。再実行しないこと。** 下記のタスクはすべて実装済みで、チェックボックスが
+> 未チェックなのはプランの書き方によるもので、残作業ではない。掲載しているコードは 2026-05-16 時点のもので、
+> 一部は現在では**使ってはいけない**実装になっている。特に:
+>
+> - Task 2 の `audioConverter.convert(to:from:)` 呼び出し — この API はサンプルレート
+>   変換に対応しておらず、アサート失敗でプロセスごと停止する。現行は `convert(to:error:withInputFrom:)`。
+> - 同じく Task 2 の `CMBlockBufferCopyDataBytes(...)` でブロックバッファ全体を channel 0 へコピーする箇所 — ステレオ入力で
+>   長さが倍になり片チャンネルが壊れる。現行は `withAudioBufferList` + ASBD 由来フォーマット。
+>
+> 現在の実装と制約は `CLAUDE.md` および
+> `docs/superpowers/specs/2026-05-16-system-audio-app-picker-design.md` の「実装後の追補」を参照。
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** ユーザーが「システム音声」モードでキャプチャ対象アプリ (Zoom 等) をインラインで選択できる UI を `ControlPanel` に追加する。

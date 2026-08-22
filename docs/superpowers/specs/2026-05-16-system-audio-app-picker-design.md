@@ -2,7 +2,7 @@
 
 - 日付: 2026-05-16
 - 対象アプリ: SummaryTalk (macOS / SwiftUI / Swift 6)
-- ステータス: 設計確定 / 実装待ち
+- ステータス: **実装済み**。2026-08-23 に現行実装と食い違っていた記述を訂正（末尾の「実装後の追補」を参照）
 
 ## 1. 背景と目的
 
@@ -34,7 +34,7 @@ ControlPanel(transcriptionManager:, systemAudioManager:, ...)
 ```
 
 - `SystemAudioManager` を `ContentView` の `@State` に昇格させ、`TranscriptionManager` / `IPtalkManager` と同列で扱う
-- `TranscriptionManager.systemAudioManager` プロパティは**削除**し、録音開始 API には引数で渡す形に変更する (`startRecording(systemAudioManager:selectedApp:)`)
+- `TranscriptionManager.systemAudioManager` プロパティは**削除**し、録音開始 API には引数で渡す形に変更する（実装後のシグネチャは `startRecording(systemAudioManager:)`。対象アプリは引数ではなく `SystemAudioManager.selectedApp` から読む）
 - `SystemAudioAppPicker` は `@Bindable var manager: SystemAudioManager` のみを依存に持つ単一責務の View
 - `SystemAudioManager` は常時生存するが、`SCShareableContent` を呼ぶのは `refreshAvailableApps()` 実行時だけなので画面収録権限プロンプトは初期表示で出ない
 
@@ -130,7 +130,8 @@ systemAudioManager.startCapturing(app: selectedApp)
 4. 既存の `errorMessage: String?` は継続。種別判定は文字列ではなく新設の `lastErrorKind: ErrorKind?` enum を使う:
 
    ```swift
-   enum ErrorKind { case permissionDenied, listingFailed, captureFailed }
+   // 実装時の型名は SystemAudioErrorKind
+   enum SystemAudioErrorKind { case permissionDenied, listingFailed, captureFailed }
    ```
 
    View 側はこれを見て表示出し分けする。エラー文言は既存の日本語に揃える。
@@ -195,3 +196,19 @@ protocol RunningApplicationLike {
 4. `SystemAudioAppPicker` 新規追加
 5. `ControlPanel` に `SystemAudioAppPicker` を組み込み
 6. `ContentView` で `SystemAudioManager` の所有権を上げる
+
+---
+
+## 実装後の追補（2026-08-23）
+
+この設計書はピッカー UI の配線を対象としており、その下にある音声変換パスには踏み込んでいない。実装・修正を経て判明した、壊しやすい制約を記録しておく。
+
+**バッファの読み出し.** `AudioStreamOutput` は `CMSampleBuffer` を `withAudioBufferList` で読み、`AVAudioFormat` は実際の ASBD から組み立てる。float32 / 非インターリーブと決め打ちしたり、フレーム数を「全体バイト数 ÷ フレームあたりバイト数」で求めたりしてはいけない（後者は全チャンネルを 1 フレームずつと数えるため、ステレオで長さが倍になり片チャンネルが未初期化になる）。
+
+**リサンプリング.** `AVAudioConverter.convert(to:from:)` を使ってはいけない。サンプルレート変換に対応しておらず、`outputBuffer.frameCapacity >= inputBuffer.frameLength` のアサートで**プロセスごと停止する**（Swift の `catch` では捕捉できない）。プル型の `convert(to:error:withInputFrom:)` を使う。`SCStreamConfiguration.sampleRate = 16000` が効いている間は等価フォーマット経路に入るため表面化しないが、48 kHz が届いた瞬間に落ちる。
+
+**バッファの寿命.** `bufferListNoCopy` で作ったバッファは `withAudioBufferList` を抜けた時点で無効になる。ハンドラに渡す前に必ずコピーを取る（フォーマットが一致するパススルー経路も例外ではない）。
+
+**停止の検出.** `SCStream` は `Sendable` ではなく、デリゲートを弱参照で保持する。`didStopWithError` は `Task { @MainActor }` を経由して着弾するため、意図的な停止の後や次のストリーム開始後に届きうる。専用の `StreamStopObserver` が `streamGeneration` トークンを運び、世代が一致しない通知を捨てる。真偽値フラグでは `defer` が先に戻るため機能しない。
+
+**テストの入口.** `SCStream` はユニットテストで生成できないため、変換パスは `AudioStreamOutput.process(sampleBuffer:)` として切り出してある。`AudioStreamOutputTests` が合成 `CMSampleBuffer` で駆動している。

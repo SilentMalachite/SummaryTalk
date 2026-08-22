@@ -1,5 +1,13 @@
 # IPtalk Protocol Compatibility Implementation Plan
 
+> **STATUS: COMPLETED — historical record. Do not execute.** Every task below shipped; the unticked
+> checkboxes are an artefact of how the plan was written, not remaining work. The code listings are what
+> was written on 2026-05-16 and several have since been replaced — notably the `NWConnection` send path,
+> which was later given an owner because Network.framework does not retain connections, and the
+> single-datagram receive, which now re-arms and reaps idle flows. Treat this file as a record of what
+> was decided and why. For current behaviour see `CLAUDE.md`, `README.md`, and the addendum in
+> `docs/superpowers/specs/2026-05-16-iptalk-protocol-compat-design.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the custom `"TEXT"`-prefixed IPtalk implementation (port 15000) with a real IPtalk-compatible protocol over UDP ports 6711–6723 (channel-scaled), so SummaryTalk can interoperate with Shigeaki Kurita's IPtalk client.
