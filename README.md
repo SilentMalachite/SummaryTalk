@@ -13,7 +13,7 @@ SummaryTalk は、macOS 向けのリアルタイム文字起こし（要約筆�
 
 - **リアルタイム文字起こし**: Apple の Speech フレームワーク（`SFSpeechRecognizer`, ロケール `ja-JP`、対応機ではオンデバイス）で高精度な日本語音声認識を行います。部分認識結果は 0.25 秒間隔にスロットルされ、UI 更新の負荷を抑えています。
 - **システム音声キャプチャ**: `ScreenCaptureKit` を使用して、Zoom / Microsoft Teams / Google Meet などの音声を直接キャプチャします。**アプリ単位の選択ピッカー**から対象を選ぶか、「ディスプレイ全体」を選択できます。取り込んだ音声は内部で 16 kHz / モノラル / float32 に変換して認識エンジンへ橋渡しします。
-- **IPtalk 互換通信**: 本物の IPtalk と通信できる UDP 実装。1 ch あたり 6 ポート（表示 6711 / モニタ 6712 / 「送」修正 6713 / メンバ応答 6718 / メンバ探索 6722 / Undo 6723）を同時に張り、N ch では各ポートに `+100×(N-1)` を加算します。文字コードは **Shift-JIS**、ペイロードは「プレーンテキスト + LF」。LAN ブロードキャスト（`255.255.255.255`）で送信します。
+- **IPtalk 互換通信**: 本物の IPtalk と通信できる UDP 実装。1 ch あたり 6 ポート（表示 6711 / モニタ 6712 / 「送」修正 6713 / メンバ応答 6718 / メンバ探索 6722 / Undo 6723）を同時に張り、N ch では各ポートに `+100×(N-1)` を加算します。文字コードは **Shift-JIS**、ペイロードは「プレーンテキスト + LF」。送信はサブネット限定ブロードキャスト（例 `192.168.1.255`。導出できない場合や送信を拒否された場合は `255.255.255.255`）で行います。
 - **チャンネル / ハンドル名 / メンバー一覧**: パネルから 1–9 のチャンネル切替、ハンドル名の設定、検出されたメンバーの一覧表示が可能。設定は `@AppStorage` に永続化されます。
 - **認識結果の自動送信**: 音声認識が「確定行」になったタイミングで IPtalk 表示部（6711）へ自動ブロードキャストします（トグルで ON/OFF）。
 - **テキスト編集・保存**: 認識・受信したテキストをその場で編集し、テキストファイルとして保存できます。
@@ -68,10 +68,10 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 
 ## テスト
 
-`SummaryTalkTests/` に 6 スイート・計 67 件のテストがあります。
+`SummaryTalkTests/` に 6 スイート・計 89 件のテストがあります。
 
-- `IPtalkProtocolTests`（18 件）— ポート算術、Shift-JIS 往復、メンバ探索ペイロード等の純粋関数テスト。
-- `IPtalkManagerTests`（16 件）— リスナ ライフサイクル、同一チャンネル競合時のロールバック、並行接続の排他、受信フロー回収ポリシー。
+- `IPtalkProtocolTests`（35 件）— ポート算術、Shift-JIS 往復、メンバ探索ペイロード、送信元ホストの正規化、ブロードキャスト アドレスの導出といった純粋関数テスト。
+- `IPtalkManagerTests`（21 件）— リスナ ライフサイクル、同一チャンネル競合時のロールバック、並行接続の排他、受信フロー回収ポリシー、ブロードキャスト先の導出とフォールバック。
 - `TranscriptionManagerTests`（18 件）— 音声ソース切替、部分結果スロットル、確定行のコールバック発火、停止時のテキスト取りこぼし防止。
 - `SystemAudioAppChoiceTests`（6 件）— `RunningApplicationLike` を差し替えたピッカー選択肢の生成。
 - `SystemAudioManagerTests`（6 件）— 権限フローとエラー種別（permission / listing / capture）の切り分け。
@@ -82,8 +82,8 @@ xcodebuild -project SummaryTalk.xcodeproj -scheme SummaryTalk -destination 'plat
 - メンバ探索 (6722/6718) ペイロードはハンドル名 Shift-JIS バイト列での実装。本物の IPtalk とのパケットキャプチャ次第で形式の再調整が必要。
 - 6711 表示部パケットのヘッダ有無、Undo / 修正パケットの正確な書式は同様に検証待ち。
 - `NWParameters.udp.allowLocalEndpointReuse = true` により `NWListener` の生成自体は成功しますが、同一マシンで同一チャンネルを取り合うと一部ポート（特にメンバ探索 6722）が `.ready` に到達しないため、2 つ目のインスタンスは接続をロールバックしてエラーを表示します。
-- 受信フローの保持上限は 64、アイドル回収は 60 秒の固定値です。多数のピアが同時に送信する環境では最も古いフローから切断されます（そのピアの次のデータグラムで再確立されるため通信は継続します）。
-- ブロードキャスト先は `255.255.255.255` 固定。サブネット限定ブロードキャストが必要な環境では届かない可能性があります。
+- 受信フローの保持上限は既定 64、アイドル回収は既定 60 秒です（`IPtalkManager` のプロパティで変更できますが UI には出していません）。多数のピアが同時に送信する環境では最も古いフローから切断されます（そのピアの次のデータグラムで再確立されるため通信は継続します）。
+- ブロードキャスト先は、有効な IPv4 インターフェース（`en*` を優先）から算出したサブネット限定アドレスです。Network.framework がこの宛先を拒否する環境では `255.255.255.255` へ自動でフォールバックしますが、この経路は実機未検証です。
 - 詳細は [`CHANGELOG.md`](CHANGELOG.md) および `docs/superpowers/specs/` の設計書を参照。
 
 ## 開発情報
@@ -117,7 +117,7 @@ It transcribes both microphone input and system audio (e.g. Zoom), and provides 
 
 - **Real-time Transcription**: High-precision Japanese speech recognition via Apple's `SFSpeechRecognizer` (locale `ja-JP`, on-device when supported). Partial results are throttled at 0.25 s to avoid UI thrashing.
 - **System Audio Capture**: Capture audio from Zoom / Microsoft Teams / Google Meet etc. via `ScreenCaptureKit`. Choose a target app from the **app picker**, or capture the **entire display**. Buffers are converted internally to 16 kHz / mono / float32 before being fed to the recognizer.
-- **IPtalk-compatible Communication**: Real IPtalk wire-compatible UDP. Per channel, 6 ports are bound concurrently: display 6711 / monitor 6712 / "send" correction 6713 / member-reply 6718 / member-discovery 6722 / undo 6723. Channel N adds `+100×(N-1)` to each port. Payload is **plain Shift-JIS text + LF**. Broadcasts to `255.255.255.255`.
+- **IPtalk-compatible Communication**: Real IPtalk wire-compatible UDP. Per channel, 6 ports are bound concurrently: display 6711 / monitor 6712 / "send" correction 6713 / member-reply 6718 / member-discovery 6722 / undo 6723. Channel N adds `+100×(N-1)` to each port. Payload is **plain Shift-JIS text + LF**. Sends to the subnet-directed broadcast address (e.g. `192.168.1.255`), falling back to `255.255.255.255` when it cannot be derived or is refused.
 - **Channel / Handle / Member List**: Switch among channels 1–9, set your handle name, and view discovered members. Settings are persisted via `@AppStorage`.
 - **Auto-send finalized lines**: Finalized recognition lines are automatically broadcast to the IPtalk display port (6711); toggleable.
 - **Text Editing & Saving**: Edit the recognized/received text inline and save it as a text file.
@@ -166,10 +166,10 @@ Three independent `@MainActor @Observable` managers are wired together in `Conte
 
 ## Tests
 
-Six suites, 67 tests in total, under `SummaryTalkTests/`:
+Six suites, 89 tests in total, under `SummaryTalkTests/`:
 
-- `IPtalkProtocolTests` (18) — pure-function tests for port math, Shift-JIS round-trip, and member-discovery payloads.
-- `IPtalkManagerTests` (16) — listener lifecycle, same-channel conflict rollback, concurrent-connect exclusion, inbound-flow reaping policy.
+- `IPtalkProtocolTests` (35) — pure-function tests for port math, Shift-JIS round-trip, member-discovery payloads, sender-host canonicalization, and broadcast-address derivation.
+- `IPtalkManagerTests` (21) — listener lifecycle, same-channel conflict rollback, concurrent-connect exclusion, inbound-flow reaping policy, broadcast destination derivation and fallback.
 - `TranscriptionManagerTests` (18) — audio-source switching, partial-result throttling, finalized-line callback, and no text loss on stop.
 - `SystemAudioAppChoiceTests` (6) — picker entry construction via `RunningApplicationLike`.
 - `SystemAudioManagerTests` (6) — permission flow and error-kind classification (permission / listing / capture).
@@ -180,8 +180,8 @@ Six suites, 67 tests in total, under `SummaryTalkTests/`:
 - Member-discovery (6722/6718) payload is currently a Shift-JIS handle-name byte sequence; needs adjustment once we have real-IPtalk packet captures.
 - The display-port (6711) header presence and the exact byte format of Undo / correction packets are likewise pending verification.
 - `NWParameters.udp.allowLocalEndpointReuse = true` lets `NWListener` construction succeed, but when two instances contend for the same channel some ports (notably member-discovery 6722) never reach `.ready`, so the second instance rolls the connection back and surfaces an error.
-- Inbound flows are capped at 64 with a 60 s idle reap. With many peers sending at once the least recently used flow is dropped first; it is re-established on that peer's next datagram.
-- Broadcast destination is hard-coded to `255.255.255.255`; subnet-directed broadcasts (`192.168.x.255`) are not used.
+- Inbound flows are capped at 64 with a 60 s idle reap by default (both are `IPtalkManager` properties, not exposed in the UI). With many peers sending at once the least recently used flow is dropped first; it is re-established on that peer's next datagram.
+- Whether Network.framework permits sending to a subnet-directed broadcast is unverified on real hardware. A refusal falls back to `255.255.255.255` automatically, so traffic continues, but neither the UI nor a log records that the fallback happened.
 - See [`CHANGELOG.md`](CHANGELOG.md) and the design docs under `docs/superpowers/specs/` for the full list.
 
 ## Development

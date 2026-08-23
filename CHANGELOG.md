@@ -11,9 +11,10 @@
 - `IPtalkPanel` に「チャンネル」Picker (1–9)、「ハンドル名」テキストフィールド、「メンバー一覧」、「認識結果を自動送信」トグルを追加。設定は `@AppStorage` で永続化。
 - 音声認識が確定（`isFinal == true`）した行を自動的に IPtalk 表示部（6711）へブロードキャストする `TranscriptionManager.onFinalizedLine` コールバック。差分のみを送信し、新しいセッション開始 / `clearText()` で内部状態をリセット。
 - メンバ探索の往復処理。6722 で他クライアントからの問い合わせを受けると 6718 でユニキャスト応答し、自分自身も `startListening()` 完了時に 1 度ブロードキャストする。
+- ブロードキャスト先をサブネット限定アドレスとして算出する処理。有効な IPv4 インターフェース（`en*` を優先し、ループバックとリンクローカル 169.254.x.x は除外）から `ip | ~netmask` を求める。判定は純粋関数 `IPtalkProtocol.broadcastAddress(ip:netmask:)` / `preferredBroadcast(interfaces:)`、インターフェース列挙は `IPtalkManager.systemInterfaces()`（`getifaddrs`）で、後者は `interfaceProvider` によりテストから差し替えられる。
 - システム音声キャプチャ対象のアプリを選択する `SystemAudioAppPicker` UI（Zoom / Teams / Meet 等を一覧から選択。「ディスプレイ全体」も選択可能）。
 - `SystemAudioManager.lastErrorKind`（`SystemAudioErrorKind`）— UI が permission / listing / capture 失敗を区別して対処できるようにする。
-- ユニットテスト計 67 件 — `IPtalkProtocolTests`（18）/ `IPtalkManagerTests`（16）/ `TranscriptionManagerTests`（18）/ `SystemAudioAppChoiceTests`（6）/ `SystemAudioManagerTests`（6）/ `AudioStreamOutputTests`（3）。ポート算術、Shift-JIS 往復、メンバ探索ペイロード、リスナ ライフサイクル、ポート競合時のロールバック、認識セッションのライフサイクル、オーディオ変換を網羅。
+- ユニットテスト計 89 件 — `IPtalkProtocolTests`（35）/ `IPtalkManagerTests`（21）/ `TranscriptionManagerTests`（18）/ `SystemAudioAppChoiceTests`（6）/ `SystemAudioManagerTests`（6）/ `AudioStreamOutputTests`（3）。ポート算術、Shift-JIS 往復、メンバ探索ペイロード、リスナ ライフサイクル、ポート競合時のロールバック、認識セッションのライフサイクル、オーディオ変換を網羅。
 - `AudioStreamOutputTests` — 合成 `CMSampleBuffer` を用いて、ステレオ→モノラル変換時のフレーム数、パススルー時のバッファ寿命、連続リサンプリングの安定性を検証。テストから駆動できるよう `AudioStreamOutput.process(sampleBuffer:)` を切り出した（`SCStream` はユニットテストで生成できないため）。
 - `Info.plist` に `NSLocalNetworkUsageDescription` を追加し、同一ネットワーク上の端末と通信する旨を明示。
 - IPtalk パネルに、送信内容が暗号化されず LAN へブロードキャストされる旨の注意書きを表示。
@@ -25,6 +26,8 @@
 - システム音声ソース切り替え時にアプリ一覧を失わないように、`SystemAudioManager` が選択状態を保持し続けるよう変更。
 - `SystemAudioManager.startCapturing()` 成功時に過去のエラー状態を確実にクリア。
 - UDP 送信失敗時に `errorMessage` を「送信失敗: {error}」として通知（`isConnected` は維持）。
+- ブロードキャストの宛先が `255.255.255.255` 固定ではなくなった（上記）。ネットワークスタックが導出アドレスへの送信を拒否した場合は 1 度だけ `255.255.255.255` で再送し、以降はそのセッション中ずっと `255.255.255.255` を使う（`broadcastFallbackEngaged`）。フラグは再接続時にリセットされ、次のセッションで導出をやり直す。
+- 受信フローの保持上限 `maxInboundConnections` とアイドル回収時間 `inboundIdleTimeout` を `static let` からインスタンスプロパティへ変更。既定値は 64 / 60 秒のままで、UI には公開していない。
 - 音声認識を確定結果ごとに再武装し、開始 / 停止を直列化。システム音声の起動中に停止しても録音が復活しないようにした。
 - `IPtalkManager.startListening()` が全リスナの `.ready` を待ってから接続完了とするよう変更。並行呼び出しは 1 つだけが成立し、古い接続世代のタイムアウトは無視される。
 - テストターゲットの署名設定（`DEVELOPMENT_TEAM` / `CODE_SIGN_IDENTITY`）をアプリ本体に合わせた。
@@ -32,6 +35,7 @@
 
 ### Fixed
 
+- dual-stack 環境で同一ピアがメンバー一覧に二重登録される問題。IPv4-mapped IPv6（`::ffff:192.168.1.5`、および同じバイト列の 16 進表記 `::ffff:c0a8:105`）を `IPtalkProtocol.canonicalHost(_:)` が IPv4 表記へ畳み、インターフェース ゾーン（`fe80::1%en0` の `%en0`）も除去して送信元の識別子を一意にする。
 - システム音声ストリーム停止後に `audioBufferHandler` が残り続けて次回キャプチャに影響する問題。
 - 同一エラーを連続して出力していたキャプチャエラーの重複を抑止。
 - 画面収録権限を初回付与した直後に「再起動が必要」というヒントをエラーメッセージに含めるよう改善。
@@ -69,6 +73,5 @@
 - `memberDiscoveryRequest` / `memberDiscoveryReply` のペイロードは公開仕様の範囲で実装（ハンドル名の Shift-JIS バイト列）。本物 IPtalk とのパケットキャプチャ次第で形式の調整が必要。
 - 6711 表示部パケットのヘッダ有無、Undo / 修正パケットの正確な書式は同様に検証待ち。
 - `NWParameters.udp.allowLocalEndpointReuse = true` により `NWListener` の生成自体は成功するが、同一マシンで同チャンネルを取り合うと一部ポート（特にメンバ探索 6722）が `.ready` に到達しないため、2 つ目の SummaryTalk は spec §6 のロールバックに入る。`testSameChannelSecondManagerRollsBackOnPortConflict` でピン留め。
-- 受信フローの保持上限は 64、アイドル回収は 60 秒の固定値。多数のピアが同時に送信する環境では最も古いフローから切断される（次のデータグラムで再確立されるため通信自体は継続する）。
-- `endpointHost(_:)` が dual-stack 環境で IPv4-mapped IPv6 形式（`::ffff:192.168.x.x`）を返すケースがあり、同一ピアが別表現でメンバー一覧に二重登録されうる。
-- ブロードキャスト先は `255.255.255.255` 固定。サブネット限定ブロードキャスト（`192.168.x.255`）が必要な環境では届かない可能性。
+- 受信フローの保持上限は既定 64、アイドル回収は既定 60 秒（`IPtalkManager` のインスタンスプロパティで変更できるが UI には出していない）。多数のピアが同時に送信する環境では最も古いフローから切断される（次のデータグラムで再確立されるため通信自体は継続する）。
+- サブネット限定ブロードキャスト宛の送信を Network.framework が許可するかは実機未検証。拒否された場合は `255.255.255.255` へ自動フォールバックするので通信は継続するが、フォールバックが起きたことは UI にもログにも出ない。
