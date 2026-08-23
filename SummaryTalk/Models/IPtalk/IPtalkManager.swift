@@ -56,14 +56,26 @@ final class IPtalkManager {
     /// A UDP flow never reports its own end, and a peer that sends every datagram from
     /// a fresh source port — which this app does — mints one listener connection per
     /// line. Keeping the receive armed therefore has to come with reaping.
-    static let maxInboundConnections = 64
-    static let inboundIdleTimeout: TimeInterval = 60
+    var maxInboundConnections = 64
+    var inboundIdleTimeout: TimeInterval = 60
     private let networkQueue = DispatchQueue(label: "com.summarytalk.iptalk", qos: .userInitiated)
     private var pendingReadyRoles: Set<IPtalkPortRole> = []
     private var startupContinuation: CheckedContinuation<Void, Error>?
     private var startupGeneration: UInt64 = 0
     private var startupTimeoutTask: Task<Void, Never>?
     var startupTimeoutNanoseconds: UInt64 = 5_000_000_000
+
+    /// Where broadcasts go. Derived from the live interface list so a segment that
+    /// drops the global address still sees us; injectable because `getifaddrs` is not
+    /// something a unit test can stage.
+    var interfaceProvider: () -> [IPtalkInterface] = { IPtalkManager.systemInterfaces() }
+    private(set) var broadcastFallbackEngaged = false
+
+    var currentBroadcastHost: String {
+        broadcastFallbackEngaged
+            ? IPtalkProtocol.globalBroadcast
+            : IPtalkProtocol.preferredBroadcast(interfaces: interfaceProvider())
+    }
 
     init() {}
 
@@ -74,6 +86,8 @@ final class IPtalkManager {
         isConnecting = true
         defer { isConnecting = false }
         errorMessage = nil
+        // A new session re-probes the derived broadcast address.
+        broadcastFallbackEngaged = false
         startupGeneration += 1
         let generation = startupGeneration
 
@@ -270,8 +284,8 @@ final class IPtalkManager {
         let evicted = Self.inboundEvictionKeys(
             lastActivity: inboundConnections.mapValues(\.lastActivity),
             now: Date(),
-            idleTimeout: Self.inboundIdleTimeout,
-            limit: Self.maxInboundConnections
+            idleTimeout: inboundIdleTimeout,
+            limit: maxInboundConnections
         )
         for key in evicted {
             guard let tracked = inboundConnections.removeValue(forKey: key) else { continue }
@@ -309,7 +323,7 @@ final class IPtalkManager {
     private func endpointHost(_ connection: NWConnection) -> String {
         if let endpoint = connection.currentPath?.remoteEndpoint,
            case .hostPort(let host, _) = endpoint {
-            return "\(host)"
+            return IPtalkProtocol.canonicalHost(host)
         }
         return "unknown"
     }
@@ -389,21 +403,18 @@ final class IPtalkManager {
     }
 
     private func sendBroadcast(_ data: Data, port: UInt16) {
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else { return }
-        let params = NWParameters.udp
-        params.allowLocalEndpointReuse = true
-        let conn = NWConnection(host: "255.255.255.255", port: nwPort, using: params)
-        send(data, on: conn)
+        let host = currentBroadcastHost
+        // Only a derived address can be refused by the stack; once we are already on the
+        // global address there is nowhere left to fall back to.
+        sendDatagram(data, to: host, port: port, allowLocalReuse: true,
+                     broadcastFallbackPort: host == IPtalkProtocol.globalBroadcast ? nil : port)
     }
 
     private func sendUnicast(_ data: Data, to host: String, port: UInt16) {
-        guard let nwPort = NWEndpoint.Port(rawValue: port) else { return }
-        let params = NWParameters.udp
-        let conn = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
-        send(data, on: conn)
+        sendDatagram(data, to: host, port: port, allowLocalReuse: false, broadcastFallbackPort: nil)
     }
 
-    private func send(_ data: Data, on connection: NWConnection) {
+    private func send(_ data: Data, on connection: NWConnection, broadcastFallbackPort: UInt16? = nil) {
         trackOutbound(connection)
         connection.stateUpdateHandler = { [weak self, weak connection] state in
             guard let connection else { return }
@@ -411,16 +422,19 @@ final class IPtalkManager {
             case .ready:
                 connection.send(content: data, completion: .contentProcessed { [weak self] error in
                     Task { @MainActor in
+                        guard let self else { return }
                         if let error {
-                            self?.errorMessage = "送信失敗: \(error.localizedDescription)"
+                            self.handleSendFailure(error, data: data, on: connection,
+                                                   broadcastFallbackPort: broadcastFallbackPort)
+                        } else {
+                            self.releaseOutbound(connection)
                         }
-                        self?.releaseOutbound(connection)
                     }
                 })
             case .failed(let error):
                 Task { @MainActor in
-                    self?.errorMessage = "送信失敗: \(error.localizedDescription)"
-                    self?.releaseOutbound(connection)
+                    self?.handleSendFailure(error, data: data, on: connection,
+                                            broadcastFallbackPort: broadcastFallbackPort)
                 }
             case .cancelled:
                 Task { @MainActor in self?.releaseOutbound(connection) }
@@ -429,5 +443,65 @@ final class IPtalkManager {
             }
         }
         connection.start(queue: networkQueue)
+    }
+
+    private func sendDatagram(_ data: Data, to host: String, port: UInt16,
+                              allowLocalReuse: Bool, broadcastFallbackPort: UInt16?) {
+        guard let nwPort = NWEndpoint.Port(rawValue: port) else { return }
+        let params = NWParameters.udp
+        params.allowLocalEndpointReuse = allowLocalReuse
+        let connection = NWConnection(host: NWEndpoint.Host(host), port: nwPort, using: params)
+        send(data, on: connection, broadcastFallbackPort: broadcastFallbackPort)
+    }
+
+    /// A subnet-directed broadcast only works if the stack lets us send to it, which we
+    /// cannot know before trying. The first refusal retries on the global address and
+    /// pins it for the rest of the session, so an unsupported destination costs one
+    /// datagram rather than every line.
+    private func handleSendFailure(_ error: NWError, data: Data, on connection: NWConnection,
+                                   broadcastFallbackPort: UInt16?) {
+        releaseOutbound(connection)
+        if let port = broadcastFallbackPort, !broadcastFallbackEngaged {
+            engageBroadcastFallback()
+            sendDatagram(data, to: IPtalkProtocol.globalBroadcast, port: port,
+                         allowLocalReuse: true, broadcastFallbackPort: nil)
+            return
+        }
+        errorMessage = "送信失敗: \(error.localizedDescription)"
+    }
+
+    func engageBroadcastFallback() {
+        broadcastFallbackEngaged = true
+    }
+
+    /// Every IPv4 interface that is up, loopback excluded. Which one to broadcast on is
+    /// decided by `IPtalkProtocol.preferredBroadcast` so the policy stays testable.
+    static func systemInterfaces() -> [IPtalkInterface] {
+        var head: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&head) == 0, let first = head else { return [] }
+        defer { freeifaddrs(head) }
+
+        var interfaces: [IPtalkInterface] = []
+        for entry in sequence(first: first, next: { $0.pointee.ifa_next }) {
+            let flags = Int32(entry.pointee.ifa_flags)
+            guard flags & IFF_UP != 0, flags & IFF_LOOPBACK == 0 else { continue }
+            guard let address = entry.pointee.ifa_addr,
+                  address.pointee.sa_family == UInt8(AF_INET),
+                  let netmask = entry.pointee.ifa_netmask,
+                  let ipv4 = ipv4String(address),
+                  let mask = ipv4String(netmask) else { continue }
+            interfaces.append(IPtalkInterface(name: String(cString: entry.pointee.ifa_name),
+                                              ipv4: ipv4, netmask: mask))
+        }
+        return interfaces
+    }
+
+    private static func ipv4String(_ address: UnsafeMutablePointer<sockaddr>) -> String? {
+        var sin = address.withMemoryRebound(to: sockaddr_in.self, capacity: 1) { $0.pointee.sin_addr }
+        var buffer = [CChar](repeating: 0, count: Int(INET_ADDRSTRLEN))
+        guard inet_ntop(AF_INET, &sin, &buffer, socklen_t(INET_ADDRSTRLEN)) != nil else { return nil }
+        return buffer.withUnsafeBufferPointer { pointer in
+            pointer.baseAddress.map { String(cString: $0) }
+        }
     }
 }

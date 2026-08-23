@@ -211,4 +211,58 @@ final class IPtalkManagerTests: XCTestCase {
         manager.clearReceivedText()
         XCTAssertEqual(manager.receivedText, "")
     }
+
+    // MARK: - Broadcast destination
+
+    private static let localEthernet = [
+        IPtalkInterface(name: "en0", ipv4: "192.168.1.42", netmask: "255.255.255.0")
+    ]
+
+    func testBroadcastHostIsDerivedFromTheActiveInterface() {
+        let manager = IPtalkManager()
+        manager.interfaceProvider = { Self.localEthernet }
+
+        XCTAssertEqual(manager.currentBroadcastHost, "192.168.1.255",
+                       "subnet-directed broadcast reaches segments that drop 255.255.255.255")
+    }
+
+    func testBroadcastHostFallsBackToGlobalWithoutInterfaces() {
+        let manager = IPtalkManager()
+        manager.interfaceProvider = { [] }
+
+        XCTAssertEqual(manager.currentBroadcastHost, "255.255.255.255")
+    }
+
+    /// Network.framework may refuse a directed broadcast; one refusal pins the global
+    /// address for the rest of the session rather than failing every line.
+    func testEngagedFallbackPinsTheGlobalBroadcast() {
+        let manager = IPtalkManager()
+        manager.interfaceProvider = { Self.localEthernet }
+
+        manager.engageBroadcastFallback()
+
+        XCTAssertEqual(manager.currentBroadcastHost, "255.255.255.255")
+    }
+
+    func testReconnectClearsTheBroadcastFallback() async {
+        let manager = IPtalkManager()
+        manager.channel = 5
+        manager.interfaceProvider = { Self.localEthernet }
+        manager.engageBroadcastFallback()
+
+        await manager.startListening()
+        defer { manager.stopListening() }
+
+        XCTAssertEqual(manager.currentBroadcastHost, "192.168.1.255",
+                       "a new session re-probes the derived address")
+    }
+
+    // MARK: - Inbound reaping parameters
+
+    func testDefaultInboundReapingParameters() {
+        let manager = IPtalkManager()
+
+        XCTAssertEqual(manager.maxInboundConnections, 64)
+        XCTAssertEqual(manager.inboundIdleTimeout, 60)
+    }
 }
